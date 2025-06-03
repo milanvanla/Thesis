@@ -1,0 +1,814 @@
+---
+title: "Xg Boost"
+output: html_document
+date: "2025-03-28"
+---
+
+```{r setup, include=FALSE}
+# Genormaliseerde data
+# Definieer de bestandsnamen van de 4 datasets (zonder extensie)
+file_names <- c("final_aggregated_df", "final_aggregated_group1", "final_aggregated_group2", "final_aggregated_group3")
+
+# Maak een lege lijst voor de ingeladen genormaliseerde dataframes
+loaded_dfs_norm <- list()
+
+# Loop door de bestandsnamen en laad elk RDS-bestand in
+for(name in file_names) {
+  file_path <- paste0(name, ".rds")
+  loaded_dfs_norm[[name]] <- readRDS(file_path)
+  cat("Genormaliseerde dataframe", name, "is ingeladen.\n")
+}
+
+# Bekijk de eerste paar rijen van elk ingeladen genormaliseerd dataframe
+lapply(loaded_dfs_norm, head)
+
+
+# Niet-genormaliseerde data
+# Definieer expliciet de bestandsnamen van de niet-genormaliseerde data
+non_norm_file_names <- c("final_aggregated_df_non_normalized", 
+                           "final_aggregated_group1_non_normalized", 
+                           "final_aggregated_group2_non_normalized", 
+                           "final_aggregated_group3_non_normalized")
+
+# Maak een lege lijst voor de ingeladen niet-genormaliseerde dataframes
+loaded_dfs_non_norm <- list()
+
+# Loop door de niet-genormaliseerde bestandsnamen en laad elk RDS-bestand in
+for(name in non_norm_file_names) {
+  file_path <- paste0(name, ".rds")
+  loaded_dfs_non_norm[[name]] <- readRDS(file_path)
+  cat("Niet-genormaliseerde dataframe", name, "is ingeladen.\n")
+}
+
+# Bekijk de eerste paar rijen van elk ingeladen niet-genormaliseerd dataframe
+lapply(loaded_dfs_non_norm, head)
+```
+
+
+```{r cars}
+library(randomForest)
+
+# Definieer de te verklaren variabelen (targets)
+target_vars <- c("Teamleader", "Supervisor", "Administration", 
+                 "Operational Manager", "BSO", "Key Account Manager")
+
+# Maak een lijst waarin we de variable importance per target en per dataset opslaan
+importance_results <- list()
+
+# Voor reproduceerbaarheid
+set.seed(123)
+
+# Loop over elke genormaliseerde dataset
+for (dataset_name in names(loaded_dfs_norm)) {
+  cat("=====================================\n")
+  cat("Verwerken dataset:", dataset_name, "\n")
+  
+  df_norm <- loaded_dfs_norm[[dataset_name]]
+  
+  # Definieer de voorspellers als alle kolommen die niet tot de target variabelen behoren
+  predictor_vars <- setdiff(colnames(df_norm), target_vars)
+  
+  cat("Aantal voorspellers:", length(predictor_vars), "\n")
+  cat("Voorspellende variabelen:\n")
+  print(predictor_vars)
+  
+  # Initialiseer een sublijst voor deze dataset
+  importance_results[[dataset_name]] <- list()
+  
+  # Loop over elke targetvariabele
+  for (target in target_vars) {
+    cat("-------------------------------------\n")
+    cat("Model voor target:", target, "in dataset:", dataset_name, "\n")
+    
+    # Maak een subset: target + alle voorspellers
+    df_rf <- df_norm[, c(target, predictor_vars)]
+    
+    # Zorg dat de data numeriek zijn
+    df_rf[] <- lapply(df_rf, as.numeric)
+    
+    # Zet de kolomnamen om naar syntactisch geldige namen
+    original_names <- colnames(df_rf)
+    colnames(df_rf) <- make.names(original_names)
+    
+    # Pas de targetnaam aan zodat deze klopt met de nieuwe namen
+    target_clean <- make.names(target)
+    
+    # Bouw het random forest model
+    formula_rf <- as.formula(paste(target_clean, "~ ."))
+    rf_model <- randomForest(formula_rf, data = df_rf, ntree = 500, importance = TRUE)
+    
+    # Toon een samenvatting van het model
+    print(rf_model)
+    
+    # Haal de variable importance op (bijvoorbeeld %IncMSE)
+    imp <- importance(rf_model)
+    
+    # Sla de variable importance op in de sublijst voor deze dataset en target
+    importance_results[[dataset_name]][[target]] <- imp
+    
+    cat("Variable Importance voor", target, "in dataset", dataset_name, ":\n")
+    if ("%IncMSE" %in% colnames(imp)) {
+      imp_sorted <- imp[order(imp[,"%IncMSE"], decreasing = TRUE), ]
+      print(imp_sorted)
+    } else {
+      print(imp)
+    }
+    cat("\n")
+  }
+}
+
+# Maak een lijst om per dataset en per target de geselecteerde variabelen op te slaan
+selected_vars_list <- list()
+
+for (dataset_name in names(importance_results)) {
+  selected_vars_list[[dataset_name]] <- list()
+  for (target in names(importance_results[[dataset_name]])) {
+    imp <- importance_results[[dataset_name]][[target]]
+    if ("%IncMSE" %in% colnames(imp)) {
+      # Selecteer de namen van de variabelen waar %IncMSE groter is dan 8
+      selected_vars <- rownames(imp)[imp[,"%IncMSE"] > 8]
+      selected_vars_list[[dataset_name]][[target]] <- selected_vars
+      cat("Voor", target, "in dataset", dataset_name, "zijn de geselecteerde variabelen ( %IncMSE > 8 ):\n")
+      print(selected_vars)
+      cat("\n")
+    } else {
+      cat("Voor", target, "in dataset", dataset_name, "is er geen %IncMSE kolom gevonden.\n")
+    }
+  }
+}
+
+# Als voorbeeld: bekijk de geselecteerde variabelen voor "Teamleader" in de dataset "final_aggregated_df"
+selected_vars_list[["final_aggregated_df"]][["Teamleader"]]
+```
+
+
+```{r pressure, echo=FALSE}
+# Stel de te verklaren (target) variabelen vast
+target_vars <- c("Teamleader", "Supervisor", "Administration", 
+                 "Operational Manager", "BSO", "Key Account Manager")
+
+# Maak een geneste lijst om de lineaire modellen per dataset en per target op te slaan
+lm_models_all <- list()
+
+# Voor reproduceerbaarheid
+set.seed(123)
+
+# Loop over elke genormaliseerde dataset
+for (dataset_name in names(loaded_dfs_norm)) {
+  cat("=====================================\n")
+  cat("Verwerken dataset:", dataset_name, "\n")
+  
+  # Haal de dataset op
+  df_norm <- loaded_dfs_norm[[dataset_name]]
+  
+  # Definieer de voorspellers als alle kolommen die niet in target_vars zitten
+  predictor_vars <- setdiff(colnames(df_norm), target_vars)
+  
+  cat("Aantal voorspellers in", dataset_name, ":", length(predictor_vars), "\n")
+  cat("Voorspellende variabelen:\n")
+  print(predictor_vars)
+  
+  # Maak een sublijst voor deze dataset
+  lm_models_all[[dataset_name]] <- list()
+  
+  # Loop over elke targetvariabele
+  for (target in target_vars) {
+    cat("-------------------------------------\n")
+    cat("Lineair regressiemodel voor target:", target, "in dataset:", dataset_name, "\n")
+    
+    # Maak een subset: target + alle voorspellers
+    df_lm <- df_norm[, c(target, predictor_vars)]
+    
+    # Zorg dat de data numeriek zijn
+    df_lm[] <- lapply(df_lm, as.numeric)
+    
+    # Zet de kolomnamen om naar syntactisch geldige namen (nodig voor de lm formule)
+    original_names <- colnames(df_lm)
+    colnames(df_lm) <- make.names(original_names)
+    
+    # Pas de targetnaam aan zodat deze overeenkomt met de nieuwe kolomnamen
+    target_clean <- make.names(target)
+    
+    # Bouw de formule en fit het lineaire model
+    formula_lm <- as.formula(paste(target_clean, "~ ."))
+    lm_model <- lm(formula_lm, data = df_lm)
+    
+    # Sla het model op in de sublijst voor deze dataset en target
+    lm_models_all[[dataset_name]][[target]] <- lm_model
+    
+    # Toon een samenvatting van het model
+    cat("Samenvatting voor target:", target, "in dataset", dataset_name, "\n")
+    print(summary(lm_model))
+    cat("\n")
+  }
+}
+
+# lm_models_all bevat nu per dataset (bijv. "final_aggregated_df", etc.) en per targetvariabele het overeenkomstige lineaire model.
+
+```
+
+```{r}
+# Maak een geneste lijst om de stepwise modellen per dataset en per target op te slaan
+lm_models_all <- list()
+
+# Loop over elke genormaliseerde dataset
+for (dataset_name in names(loaded_dfs_norm)) {
+  cat("=====================================\n")
+  cat("Verwerken dataset:", dataset_name, "\n")
+  
+  # Maak een kopie van de dataset en zet alle kolomnamen om naar syntactisch geldige namen
+  df_model <- loaded_dfs_norm[[dataset_name]]
+  colnames(df_model) <- make.names(colnames(df_model))
+  
+  # Definieer de te verklaren (target) variabelen – let op dat de namen hier overeenkomen met de make.names()-versies
+  target_vars <- c("Teamleader", "Supervisor", "Administration", 
+                   "Operational.Manager", "BSO", "Key.Account.Manager")
+  
+  # Definieer de voorspellers als alle kolommen die geen target zijn
+  predictor_vars <- setdiff(colnames(df_model), target_vars)
+  
+  # Maak een sublijst voor deze dataset
+  lm_models_all[[dataset_name]] <- list()
+  
+  # Loop over elke targetvariabele en bouw een lineair model met stepwise selectie
+  for (target in target_vars) {
+    cat("-------------------------------------\n")
+    cat("Lineair regressiemodel voor target:", target, "in dataset:", dataset_name, "\n")
+    
+    # Bouw de formule als een string
+    formula_str <- paste(target, "~", paste(predictor_vars, collapse = " + "))
+    
+    # Bouw het initiële model
+    model_full <- lm(as.formula(formula_str), data = df_model)
+    
+    # Voer stepwise selectie uit om een eenvoudiger model te vinden (trace=0 zorgt voor minder uitvoer)
+    model_final <- step(model_full, direction = "both", trace = 0)
+    
+    # Sla het uiteindelijke model op in de sublijst
+    lm_models_all[[dataset_name]][[target]] <- model_final
+    
+    # Print een korte samenvatting voor deze targetvariabele
+    cat("Final model for", target, "in dataset", dataset_name, ":\n")
+    print(summary(model_final)[c("coefficients", "r.squared", "adj.r.squared")])
+    cat("\n----------------------------------------\n")
+  }
+}
+
+# lm_models_all bevat nu voor elke dataset en voor elke targetvariabele het overeenkomstige stepwise lineaire model.
+
+```
+
+```{r}
+library(randomForest)
+
+# Zorg dat de target-variabelen kloppen met de kolomnamen na make.names()
+target_vars <- c("Teamleader", "Supervisor", "Administration", 
+                 "Operational.Manager", "BSO", "Key.Account.Manager")
+
+# Initialiseer geneste lijsten voor de modellen en een data.frame voor de performance metrics
+lm_models_all <- list()
+rf_models_all <- list()
+performance_all <- data.frame(Dataset = character(), Target = character(), 
+                              Model = character(), RMSE = double(), 
+                              stringsAsFactors = FALSE)
+
+set.seed(123)  # voor reproduceerbaarheid
+
+# Loop over elke genormaliseerde dataset in loaded_dfs_norm
+for (dataset_name in names(loaded_dfs_norm)) {
+  cat("=====================================\n")
+  cat("Verwerken dataset:", dataset_name, "\n")
+  
+  # Haal de dataset op en zorg dat de kolomnamen syntactisch geldig zijn
+  df_norm <- loaded_dfs_norm[[dataset_name]]
+  colnames(df_norm) <- make.names(colnames(df_norm))
+  
+  # Definieer de voorspellers als alle kolommen die niet in target_vars zitten
+  predictor_vars <- setdiff(colnames(df_norm), target_vars)
+  
+  cat("Aantal voorspellers in", dataset_name, ":", length(predictor_vars), "\n")
+  cat("Voorspellende variabelen:\n")
+  print(predictor_vars)
+  
+  # Splits de data in 70% training en 30% testen
+  trainIndex <- sample(seq_len(nrow(df_norm)), size = 0.7 * nrow(df_norm))
+  train_df <- df_norm[trainIndex, ]
+  test_df <- df_norm[-trainIndex, ]
+  
+  # Initialiseer lijsten voor de modellen voor deze dataset
+  lm_models <- list()
+  rf_models <- list()
+  
+  # Loop over elke targetvariabele
+  for (target in target_vars) {
+    cat("-------------------------------------\n")
+    cat("Target:", target, "\n")
+    
+    # Bouw de formule: target ~ alle voorspellers
+    formula_str <- as.formula(paste(target, "~", paste(predictor_vars, collapse = " + ")))
+    
+    # 1. Train het lineaire model
+    lm_model <- lm(formula_str, data = train_df)
+    lm_models[[target]] <- lm_model
+    
+    # 2. Train het Random Forest model
+    rf_model <- randomForest(formula_str, data = train_df, ntree = 500)
+    rf_models[[target]] <- rf_model
+    
+    # Voorspel op de testdata
+    lm_pred <- predict(lm_model, newdata = test_df)
+    rf_pred <- predict(rf_model, newdata = test_df)
+    
+    # 3. Hybride model: gemiddelde van de twee voorspellingen
+    hybrid_pred <- (lm_pred + rf_pred) / 2
+    
+    # Verkrijg de werkelijke waarden
+    actual <- test_df[[target]]
+    
+    # Bereken de RMSE voor elk model
+    lm_rmse <- sqrt(mean((actual - lm_pred)^2, na.rm = TRUE))
+    rf_rmse <- sqrt(mean((actual - rf_pred)^2, na.rm = TRUE))
+    hybrid_rmse <- sqrt(mean((actual - hybrid_pred)^2, na.rm = TRUE))
+    
+    # Toon de eerste 10 rijen van de voorspellingen
+    results <- data.frame(
+      Actual = actual,
+      Linear_Prediction = lm_pred,
+      RandomForest_Prediction = rf_pred,
+      Hybrid_Prediction = hybrid_pred
+    )
+    
+    cat("Eerste 10 rijen van voorspellingen voor target", target, ":\n")
+    print(head(results, 10))
+    cat("\nRMSE:\n")
+    cat("  Linear:", lm_rmse, "\n")
+    cat("  Random Forest:", rf_rmse, "\n")
+    cat("  Hybrid:", hybrid_rmse, "\n\n")
+    
+    # Voeg de performance voor elk model toe aan de overzichtstabel
+    performance_all <- rbind(performance_all, data.frame(Dataset = dataset_name, Target = target, Model = "Linear", RMSE = lm_rmse, stringsAsFactors = FALSE))
+    performance_all <- rbind(performance_all, data.frame(Dataset = dataset_name, Target = target, Model = "RandomForest", RMSE = rf_rmse, stringsAsFactors = FALSE))
+    performance_all <- rbind(performance_all, data.frame(Dataset = dataset_name, Target = target, Model = "Hybrid", RMSE = hybrid_rmse, stringsAsFactors = FALSE))
+  }
+  
+  # Sla de modellen voor deze dataset op in de globale lijsten
+  lm_models_all[[dataset_name]] <- lm_models
+  rf_models_all[[dataset_name]] <- rf_models
+}
+
+cat("=====================================\n")
+cat("Samenvatting RMSE per model per target per dataset:\n")
+print(performance_all)
+
+```
+
+```{r xgboost-stacking, message=FALSE}
+library(xgboost)
+
+# Dataframe voor de XGB‐scores
+perf_xgb <- data.frame(
+  Dataset = character(),
+  Target  = character(),
+  Model   = character(),
+  RMSE    = double(),
+  stringsAsFactors = FALSE
+)
+
+# bovenaan in de chunk, nog voor de for(ds in …)
+xgb_models_all <- list()
+
+
+for (dataset_name in names(loaded_dfs_norm)) {
+  # — herhaal je train/test split —
+  df_norm    <- loaded_dfs_norm[[dataset_name]]
+  colnames(df_norm) <- make.names(colnames(df_norm))
+  trainIndex <- sample(seq_len(nrow(df_norm)), size = 0.7 * nrow(df_norm))
+  train_df   <- df_norm[ trainIndex, ]
+  test_df    <- df_norm[-trainIndex, ]
+
+  predictor_vars <- setdiff(colnames(train_df), target_vars)
+
+  for (target in target_vars) {
+    # 1) Train basis‐modellen
+    formula_str <- as.formula(paste(target, "~", paste(predictor_vars, collapse = " + ")))
+    lm_model    <- lm(formula_str, data = train_df)
+    rf_model    <- randomForest(formula_str, data = train_df, ntree = 500)
+
+    # 2) Maak stack‐features op de TRAINSET
+    train_preds <- data.frame(
+      pred_lm     = predict(lm_model, newdata = train_df),
+      pred_rf     = predict(rf_model, newdata = train_df),
+      pred_hybrid = (predict(lm_model, newdata = train_df) +
+                     predict(rf_model, newdata = train_df)) / 2
+    )
+
+    # 3) Fit XGBoost‐meta‐model
+    dtrain_meta <- xgb.DMatrix(
+      data  = as.matrix(train_preds),
+      label = train_df[[target]]
+    )
+    xgb_meta <- xgb.train(
+      params  = list(
+        objective        = "reg:squarederror",
+        eta              = 0.05,
+        max_depth        = 6,
+        subsample        = 0.8,
+        colsample_bytree = 0.8
+      ),
+      data    = dtrain_meta,
+      nrounds = 200,
+      verbose = 0
+    )
+    
+    # bewaar het model voor later gebruik
+    xgb_models_all[[dataset_name]][[target]] <- xgb_meta
+
+
+    # 4) Zelfde drie voorspellingen op de TESTSET
+    test_preds <- data.frame(
+      pred_lm     = predict(lm_model, newdata = test_df),
+      pred_rf     = predict(rf_model, newdata = test_df),
+      pred_hybrid = (predict(lm_model, newdata = test_df) +
+                     predict(rf_model, newdata = test_df)) / 2
+    )
+
+    # 5) Laat XGB de finale predictie maken en bereken RMSE
+    final_pred  <- predict(xgb_meta, xgb.DMatrix(as.matrix(test_preds)))
+    boosted_rmse<- sqrt(mean((test_df[[target]] - final_pred)^2, na.rm = TRUE))
+
+    perf_xgb <- rbind(perf_xgb,
+      data.frame(
+        Dataset = dataset_name,
+        Target  = target,
+        Model   = "Stacked-XGB",
+        RMSE    = boosted_rmse,
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+}
+
+# Toon de performance van het meta‐model
+print(perf_xgb)
+# str(xgb_models_all)
+```
+
+```{r}
+# --- Nieuwe data (zelfde kolommen als in de predictorvariabelen) ---
+new_data <- data.frame(
+  Prod..Hours    = c(8061.522805),
+  E.Times        = c(445.16220),
+  V.Times        = c(589.24947),
+  A_Receiving          = c(106.44577),
+  A_Putaway_Manual     = c(21.42561),
+  A_Putaway_Auto       = c(190.24427),
+  A_Unloading_Boxes    = c(582.84687),
+  A_Unloading_Pallets  = c(65.46301),
+  B_Loading            = c(681.57577),
+  B_Packing            = c(177.19069),
+  B_Picking_Manual     = c(4427.03793),
+  B_Picking_Auto       = c(710.88402),
+  C_Pallet_Moves       = c(901.40837),
+  C_Box_Moves          = c(192.45341),
+  D_Cycle_Count        = c(0),
+  D_VAS                = c(0),
+  D_Returns            = c(0),
+  D_Stock              = c(0)
+)
+
+# Zorg ervoor dat de kolomnamen in new_data syntactisch geldig zijn (zoals in de trainingdata)
+new_data2 <- new_data
+colnames(new_data2) <- make.names(colnames(new_data2))
+
+# Normalisatie: in de trainingdata werd gedeeld door de scaling variabele, hier is dat "Prod..Hours"
+scaling_var_new <- "Prod..Hours"
+cols_to_normalize_new <- setdiff(colnames(new_data2), scaling_var_new)
+new_data_norm <- new_data2
+new_data_norm[cols_to_normalize_new] <- lapply(new_data_norm[cols_to_normalize_new], function(x) {
+  as.numeric(as.character(x)) / new_data_norm[[scaling_var_new]]
+})
+
+# Bekijk de genormaliseerde nieuwe data
+head(new_data_norm)
+
+# --- Voorspellingen berekenen voor elk van de 4 genormaliseerde datasets ---
+# We nemen aan dat de modellen eerder zijn opgeslagen in:
+# lm_models_all: een geneste lijst met lineaire modellen per dataset en per target
+# rf_models_all: een geneste lijst met random forest modellen per dataset en per target
+# Ook gaan we ervan uit dat de targetvariabelen in de modellen exact dezelfde namen hebben als hieronder:
+target_vars <- c("Teamleader", "Supervisor", "Administration", 
+                 "Operational.Manager", "BSO", "Key.Account.Manager")
+
+# Initialiseer een lijst om de voorspellingen per dataset op te slaan
+predictions_all <- list()
+
+# Loop over elke dataset (de sleutels in lm_models_all)
+for (dataset_name in names(lm_models_all)) {
+  cat("=====================================\n")
+  cat("Voorspellingen voor dataset:", dataset_name, "\n")
+  
+  # Maak een lege data.frame voor de voorspellingen (ratio's)
+  pred_df <- data.frame(row.names = 1:nrow(new_data_norm))
+  
+  # Loop over elke targetvariabele
+  for (target in target_vars) {
+    # Haal het lineaire model en het RF-model op voor de huidige target en dataset
+    lm_model <- lm_models_all[[dataset_name]][[target]]
+    rf_model <- rf_models_all[[dataset_name]][[target]]
+    
+    # Voorspel op de genormaliseerde nieuwe data
+    lm_pred <- predict(lm_model, newdata = new_data_norm)
+    rf_pred <- predict(rf_model, newdata = new_data_norm)
+    
+    # Hybride model: gemiddelde van de twee voorspellingen
+    hybrid_pred <- (lm_pred + rf_pred) / 2
+    
+    xgb_pred <- predict(
+      xgb_models_all[[dataset_name]][[target]],
+      xgb.DMatrix(as.matrix(data.frame(
+        pred_lm     = lm_pred,
+        pred_rf     = rf_pred,
+        pred_hybrid = hybrid_pred
+      )))
+    )
+    
+    # Voeg de voorspellingen toe aan de pred_df
+    pred_df[[paste0(target, "_XGB")]] <- xgb_pred
+    pred_df[[paste0(target, "_LM")]] <- lm_pred
+    pred_df[[paste0(target, "_RF")]] <- rf_pred
+    pred_df[[paste0(target, "_Hybrid")]] <- hybrid_pred
+  }
+  
+  # Als je absolute voorspellingen wilt, vermenigvuldig dan met de scaling variabele
+  predictions_abs <- sapply(pred_df, function(pred) pred * new_data2[[scaling_var_new]])
+  
+  # Bewaar de ratio's en absolute voorspellingen in de lijst
+  predictions_all[[dataset_name]] <- list(ratio = pred_df, absolute = predictions_abs)
+}
+
+# Print de voorspellingen per dataset
+for (dataset_name in names(predictions_all)) {
+  cat("=====================================\n")
+  cat("Dataset:", dataset_name, "\n")
+  cat("Voorspellingen (ratio's):\n")
+  print(predictions_all[[dataset_name]]$ratio)
+  cat("Voorspellingen (absoluut):\n")
+  print(predictions_all[[dataset_name]]$absolute)
+  cat("\n")
+}
+
+```
+```{r}
+aggregated_by_warehouse <- readRDS("aggregated_by_warehouse.rds")
+
+# Controleer kort de kolomnamen
+lapply(aggregated_by_warehouse, names)
+
+# Pas de kolomnamen aan zodat deze overeenkomen met jouw trainingsdata
+aggregated_by_warehouse <- lapply(aggregated_by_warehouse, function(df) {
+  cn <- trimws(colnames(df))  # Verwijder spaties voor en na
+  cn <- gsub("TeamLeader_Agg", "Teamleader", cn)
+  cn <- gsub("Supervisor_Agg", "Supervisor", cn)
+  cn <- gsub("Administration_Agg", "Administration", cn)
+  cn <- gsub("TOTAL Prod. Hours", "Prod. Hours", cn)
+  cn <- gsub("TOTAL E-Times", "E-Times", cn)
+  cn <- gsub("TOTAL V-Times", "V-Times", cn)
+  colnames(df) <- cn
+  df
+})
+
+# Filter: verwijder warehouses met een gemiddeld "Prod. Hours" NA of < 20
+aggregated_by_warehouse <- aggregated_by_warehouse[!sapply(aggregated_by_warehouse, function(df) {
+  if("Prod. Hours" %in% colnames(df)){
+    avg <- mean(as.numeric(df[["Prod. Hours"]]), na.rm = TRUE)
+    is.na(avg) || avg < 20
+  } else {
+    TRUE  # als de kolom ontbreekt, verwijder de warehouse ook
+  }
+})]
+
+```
+
+```{r}
+
+target_vars <- c("Teamleader", "Supervisor", "Administration", 
+                 "Operational.Manager", "BSO", "Key.Account.Manager")
+training_predictors <- setdiff(colnames(df_norm), target_vars)  # df_norm is je trainingsdata
+
+# Initialiseer een lijst om de performance per warehouse op te slaan
+performance_list <- list()
+
+# Loop over elk warehouse in 'aggregated_by_warehouse'
+for (wh in names(aggregated_by_warehouse)) {
+  cat("=====================================\n")
+  cat("Verwerken warehouse:", wh, "\n")
+  
+  # Haal de warehouse data op (in absolute waarden)
+  wh_data <- aggregated_by_warehouse[[wh]]
+  
+  # Maak de kolomnamen syntactisch geldig
+  colnames(wh_data) <- make.names(colnames(wh_data))
+  
+  # Definieer de schaalvariabele; na make.names("Prod. Hours") wordt dit "Prod..Hours"
+  scaling_var_wh <- "Prod..Hours"
+  if (!(scaling_var_wh %in% colnames(wh_data))) {
+    cat("Warehouse", wh, "heeft geen", scaling_var_wh, "- overslaan.\n")
+    next
+  }
+  
+  # Zorg dat de schaalvariabele numeriek is
+  wh_data[[scaling_var_wh]] <- as.numeric(as.character(wh_data[[scaling_var_wh]]))
+  
+  # Normaliseer de data: deel alle kolommen (behalve de schaalvariabele) per rij
+  cols_to_norm_wh <- setdiff(colnames(wh_data), scaling_var_wh)
+  wh_norm <- wh_data
+  scaling_values <- as.numeric(as.character(wh_norm[[scaling_var_wh]]))
+  wh_norm[cols_to_norm_wh] <- lapply(wh_norm[cols_to_norm_wh], function(x) {
+    as.numeric(as.character(x)) / scaling_values
+  })
+  
+  # Vervang niet-finite waarden (NA, NaN, Inf) door 0
+  wh_norm[] <- lapply(wh_norm, function(x) {
+    if (is.numeric(x)) {
+      x[!is.finite(x)] <- 0
+    }
+    return(x)
+  })
+  
+  # Zorg dat de structuur overeenkomt met de trainingsdata:
+  # Voeg ontbrekende voorspellende kolommen toe met 0
+  missing_preds <- setdiff(training_predictors, colnames(wh_norm))
+  if (length(missing_preds) > 0) {
+    missing_df <- as.data.frame(matrix(0, nrow = nrow(wh_norm), ncol = length(missing_preds)))
+    colnames(missing_df) <- missing_preds
+    wh_norm <- cbind(wh_norm, missing_df)
+  }
+  
+  # Gebruik alleen de voorspellende kolommen en de beschikbare targetvariabelen
+  available_targets <- intersect(target_vars, colnames(wh_norm))
+  wh_norm <- wh_norm[, c(training_predictors, available_targets), drop = FALSE]
+  
+  # Bepaal een representatieve schaalwaarde, hier het gemiddelde van de schaalvariabele
+  avg_scaling <- mean(scaling_values, na.rm = TRUE)
+  
+  # Initialiseer een tijdelijke performance tabel voor deze warehouse
+  wh_perf <- data.frame()
+  
+  # Extra loop: over elke modelset (dus per getrainde modelset)
+  for (model_ds in names(lm_models_all)) {
+    cat("   Modelset:", model_ds, "\n")
+    
+    # Loop over elke targetvariabele
+    for (target in target_vars) {
+      if (!(target %in% colnames(wh_norm))) next
+      
+      # Haal het lineaire model en RF-model uit de modelset 'model_ds'
+      lm_model <- lm_models_all[[model_ds]][[target]]
+      rf_model <- rf_models_all[[model_ds]][[target]]
+      
+      # Voorspel op de warehouse data (genormaliseerde waarden)
+      lm_pred_wh <- predict(lm_model, newdata = wh_norm)
+      rf_pred_wh <- predict(rf_model, newdata = wh_norm)
+      hybrid_pred_wh <- (lm_pred_wh + rf_pred_wh) / 2
+      xgb_pred_wh <- predict(
+        xgb_models_all[[model_ds]][[target]],
+        xgb.DMatrix(as.matrix(data.frame(
+          pred_lm     = lm_pred_wh,
+          pred_rf     = rf_pred_wh,
+          pred_hybrid = hybrid_pred_wh
+        )))
+      )
+      
+      # Werkelijke (genormaliseerde) waarden
+      actual_norm <- as.numeric(as.character(wh_norm[[target]]))
+      
+      # Bereken foutmetingen op genormaliseerde schaal
+      lm_rmse <- sqrt(mean((actual_norm - lm_pred_wh)^2, na.rm = TRUE))
+      rf_rmse <- sqrt(mean((actual_norm - rf_pred_wh)^2, na.rm = TRUE))
+      hybrid_rmse <- sqrt(mean((actual_norm - hybrid_pred_wh)^2, na.rm = TRUE))
+      xgb_rmse       <- sqrt(mean((actual_norm - xgb_pred_wh)^2,    na.rm=TRUE))
+
+      
+      lm_mse <- mean((actual_norm - lm_pred_wh)^2, na.rm = TRUE)
+      rf_mse <- mean((actual_norm - rf_pred_wh)^2, na.rm = TRUE)
+      hybrid_mse <- mean((actual_norm - hybrid_pred_wh)^2, na.rm = TRUE)
+      xgb_mse        <- mean((actual_norm - xgb_pred_wh)^2,    na.rm=TRUE)
+
+      
+      # Zet de genormaliseerde voorspellingen terug naar absolute waarden
+      lm_pred_abs <- lm_pred_wh * avg_scaling
+      rf_pred_abs <- rf_pred_wh * avg_scaling
+      hybrid_pred_abs <- hybrid_pred_wh * avg_scaling
+      
+      # Bereken de gemiddelde absolute voorspelling per model
+      lm_mean_pred <- mean(lm_pred_abs, na.rm = TRUE)
+      rf_mean_pred <- mean(rf_pred_abs, na.rm = TRUE)
+      hybrid_mean_pred <- mean(hybrid_pred_abs, na.rm = TRUE)
+      xgb_mean_pred    <- mean(xgb_pred_wh * avg_scaling,    na.rm=TRUE)
+
+      
+      # Bereken de ware gemiddelde absolute waarde (via de genormaliseerde echte waarden)
+      true_mean_abs <- mean(actual_norm, na.rm = TRUE) * avg_scaling
+      
+      # Bouw een resultaatdata.frame voor deze target en modelset (3 rijen: LM, RF, Hybrid)
+    target_df <- data.frame(
+      Warehouse        = wh,
+      ModelDataset     = model_ds,
+      Target           = target,
+      Model            = c("LM", "RF", "Hybrid", "XGB"),
+      Mean_Prediction  = c(lm_mean_pred, rf_mean_pred, hybrid_mean_pred, xgb_mean_pred),
+      True_Mean        = true_mean_abs,
+      RMSE             = c(lm_rmse, rf_rmse, hybrid_rmse, xgb_rmse),
+      MSE              = c(lm_mse, rf_mse, hybrid_mse, xgb_mse),
+      Total_Prod_Hours = avg_scaling,
+      stringsAsFactors = FALSE
+    )
+
+      
+      wh_perf <- rbind(wh_perf, target_df)
+    } # einde target loop
+  } # einde modelset loop
+  
+  if (nrow(wh_perf) > 0) {
+    performance_list[[wh]] <- wh_perf
+    cat("Performance voor warehouse", wh, ":\n")
+    print(wh_perf)
+    cat("\n")
+  }
+}
+
+# Combineer alle resultaten in één overzichtelijke tabel
+final_perf_df <- do.call(rbind, performance_list)
+options(scipen = 999)  # Schakel wetenschappelijke notatie uit
+print(final_perf_df)
+
+
+```
+
+```{r}
+# -----------------------------------------------------------
+# Maak de resultaten "tidy" zodat ze makkelijk gevisualiseerd kunnen worden
+# We gebruiken hiervoor dplyr en tidyr
+  library(dplyr)
+  library(tidyr)
+  
+  # Pivot de kolommen met performance metrics naar een lange (long) structuur
+  tidy_perf_df <- final_perf_df %>%
+    pivot_longer(
+      cols = c(RMSE, MSE, Mean_Prediction),
+      names_to = "Metric",
+      values_to = "Value"
+    )
+  
+  # Bekijk de eerste paar rijen van de tidy data
+  print(head(tidy_perf_df))
+  
+  # -----------------------------------------------------------
+  # Voorbeeld: Visualisatie van RMSE per warehouse per modelset
+  library(ggplot2)
+
+ggplot(tidy_perf_df %>% filter(Metric == "RMSE"),
+       aes(x = Warehouse, y = Value, fill = Model)) +
+  geom_boxplot() +
+  facet_wrap(~ ModelDataset) +
+  labs(title = "RMSE per Warehouse per Modelset",
+       y = "RMSE",
+       x = "Warehouse")
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# We gaan er vanuit dat tidy_perf_df de volgende kolommen bevat:
+# Warehouse, ModelDataset, Target, Model, True_Mean, Total_Prod_Hours, Metric, Value
+# waarbij Metric waarden heeft uit "Mean_Prediction", "RMSE" en "MSE".
+
+# Filter de gewenste metrics (Mean_Prediction en RMSE) en hernoem Mean_Prediction naar Mean:
+tidy_perf_filtered <- tidy_perf_df %>%
+  filter(Metric %in% c("Mean_Prediction", "RMSE")) %>%
+  mutate(Metric = if_else(Metric == "Mean_Prediction", "Mean", Metric))
+
+# Pivot de data naar wide formaat
+final_wide_df <- tidy_perf_filtered %>%
+  pivot_wider(
+    id_cols = c(Warehouse, Target, True_Mean, Total_Prod_Hours),
+    names_from = c(ModelDataset, Model, Metric),
+    values_from = Value,
+    names_sep = "_"  # resulteert in kolomnamen als "Modelset1_LM_Mean", "Modelset1_LM_RMSE", etc.
+  )
+
+# Bekijk de nieuwe wide dataframe
+print(final_wide_df)
+
+```
+
+```{r}
+# Sla tidy_perf_df op als een RDS-bestand
+saveRDS(final_wide_df, file = "final_wide_df.rds")
+
+# Optioneel: sla ook als CSV op voor handmatige inspectie
+write.csv(final_wide_df, file = "final_wide_df.csv", row.names = FALSE)
+
+```
