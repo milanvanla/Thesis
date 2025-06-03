@@ -1,0 +1,353 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-27"
+---
+
+```{r setup, include=FALSE}
+# Genormaliseerde data
+# Definieer de bestandsnamen van de 4 datasets (zonder extensie)
+file_names <- c("final_aggregated_df", "final_aggregated_group1", "final_aggregated_group2", "final_aggregated_group3")
+
+# Maak een lege lijst voor de ingeladen genormaliseerde dataframes
+loaded_dfs_norm <- list()
+
+# Loop door de bestandsnamen en laad elk RDS-bestand in
+for(name in file_names) {
+  file_path <- paste0(name, ".rds")
+  loaded_dfs_norm[[name]] <- readRDS(file_path)
+  cat("Genormaliseerde dataframe", name, "is ingeladen.\n")
+}
+
+# Bekijk de eerste paar rijen van elk ingeladen genormaliseerd dataframe
+lapply(loaded_dfs_norm, head)
+
+
+# Niet-genormaliseerde data
+# Definieer expliciet de bestandsnamen van de niet-genormaliseerde data
+non_norm_file_names <- c("final_aggregated_df_non_normalized", 
+                           "final_aggregated_group1_non_normalized", 
+                           "final_aggregated_group2_non_normalized", 
+                           "final_aggregated_group3_non_normalized")
+
+# Maak een lege lijst voor de ingeladen niet-genormaliseerde dataframes
+loaded_dfs_non_norm <- list()
+
+# Loop door de niet-genormaliseerde bestandsnamen en laad elk RDS-bestand in
+for(name in non_norm_file_names) {
+  file_path <- paste0(name, ".rds")
+  loaded_dfs_non_norm[[name]] <- readRDS(file_path)
+  cat("Niet-genormaliseerde dataframe", name, "is ingeladen.\n")
+}
+
+# Bekijk de eerste paar rijen van elk ingeladen niet-genormaliseerd dataframe
+lapply(loaded_dfs_non_norm, head)
+
+
+```
+
+```{r}
+# Verwijder de kolom "D_Stock" uit de ingeladen genormaliseerde data
+loaded_dfs_norm <- lapply(loaded_dfs_norm, function(df) {
+  if("D_Stock" %in% colnames(df)) {
+    df <- df[, !colnames(df) %in% "D_Stock"]
+  }
+  return(df)
+})
+
+# Verwijder de kolom "D_Stock" uit de ingeladen niet-genormaliseerde data
+loaded_dfs_non_norm <- lapply(loaded_dfs_non_norm, function(df) {
+  if("D_Stock" %in% colnames(df)) {
+    df <- df[, !colnames(df) %in% "D_Stock"]
+  }
+  return(df)
+})
+
+# Controleer of "D_Stock" nergens meer voorkomt:
+print(sapply(loaded_dfs_norm, function(df) "D_Stock" %in% colnames(df)))
+print(sapply(loaded_dfs_non_norm, function(df) "D_Stock" %in% colnames(df)))
+
+```
+```{r}
+if(!exists("final_dfs_processed_norm")) {
+  final_dfs_processed_norm <- lapply(loaded_dfs_norm, function(df) {
+    list(normalized = df)
+  })
+  cat("final_dfs_processed_norm niet gevonden; loaded_dfs_norm wordt gebruikt als genormaliseerde data.\n")
+}
+
+if(!exists("final_dfs_processed_non_norm")) {
+  final_dfs_processed_non_norm <- lapply(loaded_dfs_non_norm, function(df) {
+    list(normalized = df)
+  })
+  cat("final_dfs_processed_non_norm niet gevonden; loaded_dfs_non_norm wordt gebruikt als niet-genormaliseerde data.\n")
+}
+
+final_dfs_types <- list(
+  "Normalized" = final_dfs_processed_norm,
+  "Non-normalized" = final_dfs_processed_non_norm
+)
+
+```
+
+
+```{r cars}
+library(reshape2)
+library(ggplot2)
+library(dplyr)  # Voor de recode functie
+
+# Definieer de overhead variabelen (pas deze zo nodig aan naar de exacte kolomnamen in jouw data)
+overhead_vars <- c("Teamleader", "Supervisor", "Administration", 
+                   "Operational Manager", "BSO", "Key Account Manager")
+
+# ---- Heatmaps voor de genormaliseerde data ----
+for(df_name in names(loaded_dfs_norm)) {
+  # Haal het dataframe op
+  df <- loaded_dfs_norm[[df_name]]
+  
+  # Subset de data met alleen de overhead variabelen.
+  overhead_df <- df[, overhead_vars, drop = FALSE]
+  
+  # Bereken de correlatiematrix
+  corr_overhead <- cor(overhead_df, use = "complete.obs")
+  
+  # Zet de matrix om naar long format voor ggplot2
+  corr_overhead_df <- melt(corr_overhead)
+  
+  # Indien nodig: recode bepaalde variabelen (bijvoorbeeld als de kolomnamen in de data anders worden genoemd)
+  corr_overhead_df$Var1 <- recode(corr_overhead_df$Var1,
+                                  "TeamLeader_Agg" = "Teamleader",
+                                  "Supervisor_Agg" = "Supervisor",
+                                  "Administration_Agg" = "Administration")
+  corr_overhead_df$Var2 <- recode(corr_overhead_df$Var2,
+                                  "TeamLeader_Agg" = "Teamleader",
+                                  "Supervisor_Agg" = "Supervisor",
+                                  "Administration_Agg" = "Administration")
+  
+  # Maak de heatmap
+  p <- ggplot(corr_overhead_df, aes(x = Var1, y = Var2, fill = value)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                         midpoint = 0, limits = c(-1, 1),
+                         name = "Pearson\ncorrelation") +
+    theme_minimal() +
+    labs(title = paste("Heatmap: Overhead variables - Normalized -", df_name)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Toon de plot (of sla deze op indien gewenst)
+  print(p)
+  
+  # Optioneel: sla de plot op als een bestand
+  # ggsave(filename = paste0(df_name, "_norm_overhead_heatmap.png"), plot = p, width = 6, height = 5)
+}
+
+# ---- Heatmaps voor de niet-genormaliseerde data ----
+for(df_name in names(loaded_dfs_non_norm)) {
+  # Haal het dataframe op
+  df <- loaded_dfs_non_norm[[df_name]]
+  
+  # Subset de data met alleen de overhead variabelen.
+  overhead_df <- df[, overhead_vars, drop = FALSE]
+  
+  # Bereken de correlatiematrix
+  corr_overhead <- cor(overhead_df, use = "complete.obs")
+  
+  # Zet de matrix om naar long format voor ggplot2
+  corr_overhead_df <- melt(corr_overhead)
+  
+  # Indien nodig: recode bepaalde variabelen (bijvoorbeeld als de kolomnamen in de data anders worden genoemd)
+  corr_overhead_df$Var1 <- recode(corr_overhead_df$Var1,
+                                  "TeamLeader_Agg" = "Teamleader",
+                                  "Supervisor_Agg" = "Supervisor",
+                                  "Administration_Agg" = "Administration")
+  corr_overhead_df$Var2 <- recode(corr_overhead_df$Var2,
+                                  "TeamLeader_Agg" = "Teamleader",
+                                  "Supervisor_Agg" = "Supervisor",
+                                  "Administration_Agg" = "Administration")
+  
+  # Maak de heatmap
+  p <- ggplot(corr_overhead_df, aes(x = Var1, y = Var2, fill = value)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                         midpoint = 0, limits = c(-1, 1),
+                         name = "Pearson\ncorrelation") +
+    theme_minimal() +
+    labs(title = paste("Heatmap: Overhead - Non-norm -", df_name)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Toon de plot (of sla deze op indien gewenst)
+  print(p)
+  
+  # Optioneel: sla de plot op als een bestand
+  # ggsave(filename = paste0(df_name, "_non_norm_overhead_heatmap.png"), plot = p, width = 6, height = 5)
+}
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+# Helperfunctie: mapping van de originele df-naam naar de gewenste plotnaam
+getPlotName <- function(df_name, type) {
+  # Verwijder de suffix "_non_normalized" indien aanwezig, zodat de mapping klopt
+  df_name_clean <- gsub("_non_normalized", "", df_name)
+  
+  mapping <- list(
+    "final_aggregated_df"       = "All_warehouses",
+    "final_aggregated_group1"   = "Group_1",
+    "final_aggregated_group2"   = "Group_2",
+    "final_aggregated_group3"   = "Group_3"
+  )
+  
+  base_name <- mapping[[df_name_clean]]
+  if (is.null(base_name)) base_name <- df_name_clean  # fallback als de mapping niet bestaat
+  
+  if (type == "Normalized") {
+    return(paste0(base_name, "_norm"))
+  } else {
+    return(base_name)
+  }
+}
+
+
+# Definieer de vaste variabelen
+chosen_vars <- c("Prod. Hours", "E-Times", "V-Times")
+overhead_vars <- c("Teamleader", "Supervisor", "Administration", 
+                   "Operational Manager", "BSO", "Key Account Manager")
+
+# Loop door beide data types heen
+for(type in names(final_dfs_types)) {
+  cat("Bezig met het verwerken van", type, "data...\n")
+  
+  for(df_name in names(final_dfs_types[[type]])) {
+    
+    # Gebruik de 'normalized'-slot; bij non-normalized is dit gewoon de ruwe data
+    df <- final_dfs_types[[type]][[df_name]]$normalized
+    
+    # Bepaal alle variabelen en de activiteitenvariabelen (alles wat niet in chosen of overhead zit)
+    all_vars <- colnames(df)
+    activity_vars <- setdiff(all_vars, c(chosen_vars, overhead_vars))
+    
+    # Bepaal de aangepaste plotnaam
+    plot_name <- getPlotName(df_name, type)
+    
+    ## 1. Correlatie tussen de gekozen variabelen
+    corr1 <- cor(df[, chosen_vars], use = "complete.obs")
+    df1 <- melt(corr1)
+    
+    p1 <- ggplot(df1, aes(x = Var1, y = Var2, fill = value)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+      scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                           midpoint = 0, limits = c(-1, 1),
+                           name = "Correlation") +
+      theme_minimal() +
+      labs(title = plot_name,
+           x = "", y = "") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p1)
+    
+    ## 2. Correlatie tussen gekozen en overhead-variabelen
+    overhead_vars_present <- intersect(overhead_vars, colnames(df))
+    corr2 <- cor(df[, chosen_vars], df[, overhead_vars_present], use = "complete.obs")
+    df2 <- melt(corr2, varnames = c("Group", "Overhead"))
+    
+    p2 <- ggplot(df2, aes(x = Group, y = Overhead, fill = value)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = round(value, 2)), size = 4) +
+      scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                           midpoint = 0, limits = c(-1, 1),
+                           name = "Correlation") +
+      theme_minimal() +
+      labs(title = plot_name,
+           x = "Chosen", y = "Overhead") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p2)
+    
+    ## 3. Correlatie tussen gekozen en activiteit-variabelen
+    activity_vars_present <- intersect(activity_vars, colnames(df))
+    corr3 <- cor(df[, chosen_vars], df[, activity_vars_present], use = "complete.obs")
+    df3 <- melt(corr3, varnames = c("Group", "Activity"))
+    
+    p3 <- ggplot(df3, aes(x = Group, y = Activity, fill = value)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = round(value, 2)), size = 3.5) +
+      scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                           midpoint = 0, limits = c(-1, 1),
+                           name = "Correlation") +
+      theme_minimal() +
+      labs(title = plot_name,
+           x = "Chosen", y = "Activities") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p3)
+    
+    ## 4. Correlatie tussen activiteiten en (gekozen + overhead) variabelen
+    combined_vars <- c(chosen_vars, overhead_vars_present)
+    corr4 <- cor(df[, activity_vars_present], df[, combined_vars], use = "complete.obs")
+    df4 <- melt(corr4, varnames = c("Activity", "Variable"))
+    
+    p4 <- ggplot(df4, aes(x = Variable, y = Activity, fill = value)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = round(value, 2)), size = 3.5) +
+      scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                           midpoint = 0, limits = c(-1, 1),
+                           name = "Correlation") +
+      theme_minimal() +
+      labs(title = plot_name,
+           x = "Chosen & Overhead Variables", y = "Activities") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p4)
+    
+    ## 5. Correlatie tussen de overhead variabelen onderling
+    if (length(overhead_vars_present) > 1) {
+      corr_overhead <- cor(df[, overhead_vars_present], use = "complete.obs")
+      df_overhead <- melt(corr_overhead)
+      
+      p_overhead <- ggplot(df_overhead, aes(x = Var1, y = Var2, fill = value)) +
+        geom_tile(color = "white") +
+        geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+        scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                             midpoint = 0, limits = c(-1, 1),
+                             name = "Correlation") +
+        theme_minimal() +
+        labs(title = paste0(plot_name, " - Overhead Variabelen"),
+             x = "", y = "") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      
+      print(p_overhead)
+    }
+    
+    ## 6. Correlatie tussen de activiteiten variabelen onderling
+    if (length(activity_vars_present) > 1) {
+      corr_activity <- cor(df[, activity_vars_present], use = "complete.obs")
+      df_activity <- melt(corr_activity)
+      
+      p_activity <- ggplot(df_activity, aes(x = Var1, y = Var2, fill = value)) +
+        geom_tile(color = "white") +
+        geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+        scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                             midpoint = 0, limits = c(-1, 1),
+                             name = "Correlation") +
+        theme_minimal() +
+        labs(title = paste0(plot_name),
+             x = "", y = "") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      
+      print(p_activity)
+    }
+    
+  }
+}
+
+```
+
+
+
