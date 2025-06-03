@@ -1,0 +1,816 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-28"
+---
+
+```{r setup, include=FALSE}
+final_wide_df <- readRDS("final_wide_df.rds")
+final_wide_long_df <- readRDS("wide_long_performance.rds")
+
+
+```
+
+
+```{r}
+library(dplyr)
+
+tidy_perf_df <- tidy_perf_df %>% 
+  mutate(ModelDataset = recode(ModelDataset,
+                               "final_aggregated_df" = "All",
+                               "final_aggregated_group1" = "Group1",
+                               "final_aggregated_group2" = "Group2",
+                               "final_aggregated_group3" = "Group3",
+                                     "final_wide_long_df"          = "Long"        
+))
+
+```
+
+
+```{r}
+library(dplyr)
+
+# —————————————————————
+# 1) Inladen ge-aggregeerde (aggregated) resultaten
+final_wide_df <- readRDS("final_wide_df.rds")
+
+# Hernoemen zodat alle kolommen netjes eindigen op _All, _Group1, … etc.
+final_wide_df <- final_wide_df %>%
+  rename(
+    # --- All ---
+    RMSE_LM_All       = `final_aggregated_df_LM_RMSE`,
+    RMSE_RF_All       = `final_aggregated_df_RF_RMSE`,
+    RMSE_Hybrid_All   = `final_aggregated_df_Hybrid_RMSE`,
+    RMSE_XGB_All      = `final_aggregated_df_XGB_RMSE`,
+    Mean_LM_All       = `final_aggregated_df_LM_Mean`,
+    Mean_RF_All       = `final_aggregated_df_RF_Mean`,
+    Mean_Hybrid_All   = `final_aggregated_df_Hybrid_Mean`,
+    Mean_XGB_All      = `final_aggregated_df_XGB_Mean`,
+    # --- Group1 ---
+    RMSE_LM_Group1    = `final_aggregated_group1_LM_RMSE`,
+    RMSE_RF_Group1    = `final_aggregated_group1_RF_RMSE`,
+    RMSE_Hybrid_Group1= `final_aggregated_group1_Hybrid_RMSE`,
+    RMSE_XGB_Group1   = `final_aggregated_group1_XGB_RMSE`,
+    Mean_LM_Group1    = `final_aggregated_group1_LM_Mean`,
+    Mean_RF_Group1    = `final_aggregated_group1_RF_Mean`,
+    Mean_Hybrid_Group1= `final_aggregated_group1_Hybrid_Mean`,
+    Mean_XGB_Group1   = `final_aggregated_group1_XGB_Mean`,
+    # --- Group2 ---
+    RMSE_LM_Group2    = `final_aggregated_group2_LM_RMSE`,
+    RMSE_RF_Group2    = `final_aggregated_group2_RF_RMSE`,
+    RMSE_Hybrid_Group2= `final_aggregated_group2_Hybrid_RMSE`,
+    RMSE_XGB_Group2   = `final_aggregated_group2_XGB_RMSE`,
+    Mean_LM_Group2    = `final_aggregated_group2_LM_Mean`,
+    Mean_RF_Group2    = `final_aggregated_group2_RF_Mean`,
+    Mean_Hybrid_Group2= `final_aggregated_group2_Hybrid_Mean`,
+    Mean_XGB_Group2   = `final_aggregated_group2_XGB_Mean`,
+    # --- Group3 ---
+    RMSE_LM_Group3    = `final_aggregated_group3_LM_RMSE`,
+    RMSE_RF_Group3    = `final_aggregated_group3_RF_RMSE`,
+    RMSE_Hybrid_Group3= `final_aggregated_group3_Hybrid_RMSE`,
+    RMSE_XGB_Group3   = `final_aggregated_group3_XGB_RMSE`,
+    Mean_LM_Group3    = `final_aggregated_group3_LM_Mean`,
+    Mean_RF_Group3    = `final_aggregated_group3_RF_Mean`,
+    Mean_Hybrid_Group3= `final_aggregated_group3_Hybrid_Mean`,
+    Mean_XGB_Group3   = `final_aggregated_group3_XGB_Mean`
+  )
+
+# 2) Inladen long-format wide resultaten
+final_wide_long_df <- readRDS("wide_long_performance.rds")
+
+# Hernoemen van de kolommen in je long-output
+final_wide_long_df <- final_wide_long_df %>%
+  rename(
+    RMSE_LM_Long       = LM_RMSE,
+    RMSE_RF_Long       = RF_RMSE,
+    RMSE_Hybrid_Long   = Hybrid_RMSE,
+    RMSE_XGB_Long      = XGB_RMSE,
+    MSE_LM_Long        = LM_MSE,
+    MSE_RF_Long        = RF_MSE,
+    MSE_Hybrid_Long    = Hybrid_MSE,
+    MSE_XGB_Long       = XGB_MSE,
+    Mean_LM_Long       = LM_Mean_Pred,
+    Mean_RF_Long       = RF_Mean_Pred,
+    Mean_Hybrid_Long   = Hybrid_Mean_Pred,
+    Mean_XGB_Long      = XGB_Mean_Pred
+  )
+
+# 3) Recode Target zodat beide tabellen exact dezelfde factor-levels gebruiken
+final_wide_df       <- final_wide_df %>% mutate(
+  Target = recode(Target,
+                  "OperationalManager"  = "Operational.Manager",
+                  "KeyAccountManager"   = "Key.Account.Manager")
+)
+final_wide_long_df  <- final_wide_long_df %>% mutate(
+  Target = recode(Target,
+                  "OperationalManager"  = "Operational.Manager",
+                  "KeyAccountManager"   = "Key.Account.Manager")
+)
+
+# 4) Per (Warehouse, Target) nog even één rij behouden
+agg_unique <- final_wide_df      %>% distinct(Warehouse, Target, .keep_all = TRUE)
+long_unique<- final_wide_long_df %>% distinct(Warehouse, Target, .keep_all = TRUE)
+
+# 5) Join “naast elkaar”
+combined_perf_df <- agg_unique %>%
+  left_join(
+    long_unique %>% select(-True_Mean),   # True_Mean zit al in de ge-aggregeerde
+    by = c("Warehouse","Target"),
+    suffix = c("_Agg","_Long")
+  )
+
+# 6) Check
+glimpse(combined_perf_df)
+head(combined_perf_df)
+
+```
+
+```{r cars}
+library(dplyr)
+
+# 1) Group‐kolom toevoegen
+combined_perf_df <- combined_perf_df %>%
+  mutate(
+    Warehouse_Group = case_when(
+      Total_Prod_Hours <  200  ~ "Groep 1",
+      Total_Prod_Hours < 1000  ~ "Groep 2",
+      TRUE                     ~ "Groep 3"
+    ) %>%
+    factor(levels = c("Groep 1","Groep 2","Groep 3"))
+  )
+
+# 2) Even checken
+head(combined_perf_df)
+
+```
+
+
+```{r pressure, echo=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 2) Pivot de RMSE kolommen naar long-form
+tidy_combined_rmse <- combined_perf_df %>%
+  # alle kolommen die met "RMSE_" beginnen
+  pivot_longer(
+    cols = starts_with("RMSE_"),
+    # RMSE_LM_All   → c("RMSE","LM","All")
+    names_to  = c("Ignore","Model","Source"),
+    names_sep = "_",
+    values_to = "RMSE"
+  ) %>%
+  select(-Ignore) %>%
+  # maak Source wat leesbaarder
+  mutate(Source = recode(Source,
+                         All    = "Aggregated_All",
+                         Group1 = "Aggregated_G1",
+                         Group2 = "Aggregated_G2",
+                         Group3 = "Aggregated_G3",
+                         Long   = "Long_Format"))
+
+# 3) Plot: RMSE per warehouse‐group, kleur = Model, facet = Source
+ggplot(tidy_combined_rmse, aes(x = Warehouse_Group, y = RMSE, fill = Model)) +
+  geom_boxplot() +
+  facet_wrap(~ Source) +
+  labs(
+    title = "Vergelijking RMSE per Warehouse Group",
+    subtitle = "Aggregated vs. Long‐format resultaten",
+    x = "Warehouse Group",
+    y = "RMSE"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# 1) Aggregeer de RMSE per Warehouse_Group, Source (All/Group1/…/Long) en Model
+agg_rmse_combined <- tidy_combined_rmse %>% 
+  group_by(Warehouse_Group, Source, Model) %>%
+  summarise(Mean_RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop")
+
+# 2) Bar chart: per Warehouse_Group, gekleurd op Model, gefacet op Source
+ggplot(agg_rmse_combined, aes(x = Warehouse_Group, y = Mean_RMSE, fill = Model)) +
+  geom_col(position = position_dodge()) +
+  facet_wrap(~ Source) +
+  labs(
+    title = "Gemiddelde RMSE per Warehouse Groep per Model",
+    subtitle = "Vergelijking Aggregated & Long‐format",
+    x = "Warehouse Groep",
+    y = "Gemiddelde RMSE"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# 1) Stel dat je tidy_combined_rmse hebt met de kolommen:
+#    Warehouse, Warehouse_Group, Source, Model, RMSE
+#    (Source onderscheidt All/Group1/.../Long)
+
+# 2) Bereken de gemiddelde RMSE per combinatie van Warehouse_Group, Source en Model
+agg_rmse_combined <- tidy_combined_rmse %>% 
+  group_by(Warehouse_Group, Source, Model) %>% 
+  summarise(Mean_RMSE = mean(RMSE, na.rm = TRUE), .groups = "drop") %>% 
+  mutate(Dataset_Model = paste(Source, Model, sep = "_"))
+
+# 3) Haal de unieke Warehouse Groups
+warehouse_groups <- unique(agg_rmse_combined$Warehouse_Group)
+
+# 4) Loop over elke groep en plot
+for (grp in warehouse_groups) {
+  df_grp <- agg_rmse_combined %>% filter(Warehouse_Group == grp)
+  
+  p <- ggplot(df_grp, aes(x = Dataset_Model, y = Mean_RMSE, fill = Source)) +
+    geom_col(position = position_dodge(width = 0.8)) +
+    labs(
+      title = paste("Average RMSE – Warehouse Group", grp),
+      x     = "Bron en Model",
+      y     = "Average RMSE"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+
+# 1) Definieer de vier warehouses die je wil bekijken
+selected_warehouses <- c("Nilfisk BE", "Stiga SPP", "Delonghi", "O&M Halyard")
+
+# 2) Filter je gecombineerde tidy RMSE‐set
+selected_rmse_combined <- tidy_combined_rmse %>%
+  filter(
+    Warehouse %in% selected_warehouses,
+    !is.na(RMSE)
+  )
+
+# 3) Aggregeer de gemiddelde RMSE per Warehouse, Source en Model
+agg_rmse_wh_combined <- selected_rmse_combined %>% 
+  group_by(Warehouse, Source, Model) %>%
+  summarise(
+    Mean_RMSE = mean(RMSE, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # maak een label voor de x‐as
+  mutate(Dataset_Model = paste(Source, Model, sep = "_"))
+
+# 4) Print per warehouse een barplot
+for (wh in selected_warehouses) {
+  df_wh <- agg_rmse_wh_combined %>% filter(Warehouse == wh)
+  
+  p <- ggplot(df_wh, aes(x = Dataset_Model, y = Mean_RMSE, fill = Source)) +
+    geom_col(position = position_dodge(width = 0.8)) +
+    labs(
+      title = paste("Gemiddelde RMSE voor", wh),
+      x     = "Bron & Model",
+      y     = "Gemiddelde RMSE"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+
+# 5) Overzichtstabel voor alle vier de warehouses
+agg_table_combined <- agg_rmse_wh_combined %>%
+  arrange(Warehouse, Source, Model)
+
+kable(
+  agg_table_combined,
+  caption = "Gemiddelde RMSE per Geselecteerde Warehouse, Bron & Model"
+)
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+
+library(dplyr)
+
+
+
+
+combined_df <- combined_df %>%
+  mutate(Warehouse_Group = case_when(
+    Total_Prod_Hours <  200                        ~ "Groep 1",
+    Total_Prod_Hours >= 200 & Total_Prod_Hours <=1000 ~ "Groep 2",
+    Total_Prod_Hours >  1000                       ~ "Groep 3",
+    TRUE                                           ~ NA_character_
+  ))
+
+# 1) Even controleren welke kolommen er in combined_df staan:
+print(names(combined_df))
+
+
+
+# 2) Filter op Teamleader en selecteer alle RMSE‐kolommen, inclusief de lange
+teamleader_combined <- combined_df %>% 
+  filter(Target == "Teamleader") %>%
+  select(
+    Warehouse, Warehouse_Group, Target,
+    # geaggregeerde RMSE’s
+    RMSE_LM_All,    RMSE_RF_All,    RMSE_Hybrid_All,    RMSE_XGB_All,
+    RMSE_LM_Group1, RMSE_RF_Group1, RMSE_Hybrid_Group1, RMSE_XGB_Group1,
+    RMSE_LM_Group2, RMSE_RF_Group2, RMSE_Hybrid_Group2, RMSE_XGB_Group2,
+    RMSE_LM_Group3, RMSE_RF_Group3, RMSE_Hybrid_Group3, RMSE_XGB_Group3,
+    # long‐format RMSE’s
+    RMSE_LM_Long,   RMSE_RF_Long,   RMSE_Hybrid_Long,   RMSE_XGB_Long
+  )
+
+# 3) Draai naar long zodat je één kolom Model_Dataset krijgt
+teamleader_long_combined <- teamleader_combined %>%
+  pivot_longer(
+    cols = starts_with("RMSE_"),
+    names_to  = "Model_Dataset",
+    values_to = "RMSE"
+  ) %>%
+  # 4) Hernoem alle codes naar leesbare labels
+  mutate(Model_Dataset = recode(Model_Dataset,
+    "RMSE_LM_All"       = "LM All",
+    "RMSE_RF_All"       = "RF All",
+    "RMSE_Hybrid_All"   = "Hybrid All",
+    "RMSE_XGB_All"      = "XGB All",
+    "RMSE_LM_Group1"    = "LM Group1",
+    "RMSE_RF_Group1"    = "RF Group1",
+    "RMSE_Hybrid_Group1"= "Hybrid Group1",
+    "RMSE_XGB_Group1"   = "XGB Group1",
+    "RMSE_LM_Group2"    = "LM Group2",
+    "RMSE_RF_Group2"    = "RF Group2",
+    "RMSE_Hybrid_Group2"= "Hybrid Group2",
+    "RMSE_XGB_Group2"   = "XGB Group2",
+    "RMSE_LM_Group3"    = "LM Group3",
+    "RMSE_RF_Group3"    = "RF Group3",
+    "RMSE_Hybrid_Group3"= "Hybrid Group3",
+    "RMSE_XGB_Group3"   = "XGB Group3",
+    "RMSE_LM_Long"      = "LM Long",
+    "RMSE_RF_Long"      = "RF Long",
+    "RMSE_Hybrid_Long"  = "Hybrid Long",
+    "RMSE_XGB_Long"     = "XGB Long"
+  )) %>%
+  # 5) pak de tweede term als “Train_Group”
+  mutate(Train_Group = word(Model_Dataset, 2))
+
+# 6) Bepaal welke groepen je hebt
+warehouse_groups <- unique(teamleader_long_combined$Warehouse_Group)
+
+# 7) Teken per groep de barplot
+for (grp in warehouse_groups) {
+  df_grp <- filter(teamleader_long_combined, Warehouse_Group == grp)
+  
+  p <- ggplot(df_grp, aes(
+        x = reorder(Model_Dataset, RMSE),
+        y = RMSE,
+        fill = Train_Group
+      )) +
+    geom_col(position = "dodge") +
+    labs(
+      title = paste("Average RMSE for Teamleader in Warehouse Group", grp),
+      x     = "Model & Training Group",
+      y     = "Average RMSE"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+
+```
+
+```{r, eval=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(knitr)
+library(ggplot2)
+
+# Definieer de lijst met target-waarden
+targets <- c("Teamleader","Supervisor","Administration",
+             "Operational.Manager","BSO","Key.Account.Manager")
+
+for(t in targets) {
+  cat("Processing target:", t, "\n")
+  
+  # 1) Filter + selecteer alle RMSE‐kolommen én Total_Prod_Hours
+  df_target <- combined_df %>%
+    filter(Target == t) %>%
+    select(
+      Warehouse, Warehouse_Group, Target, Total_Prod_Hours,
+      # geaggregeerde RMSE’s
+      RMSE_LM_All,    RMSE_RF_All,    RMSE_Hybrid_All,    RMSE_XGB_All,
+      RMSE_LM_Group1, RMSE_RF_Group1, RMSE_Hybrid_Group1, RMSE_XGB_Group1,
+      RMSE_LM_Group2, RMSE_RF_Group2, RMSE_Hybrid_Group2, RMSE_XGB_Group2,
+      RMSE_LM_Group3, RMSE_RF_Group3, RMSE_Hybrid_Group3, RMSE_XGB_Group3,
+      # long‐format RMSE’s
+      RMSE_LM_Long,   RMSE_RF_Long,   RMSE_Hybrid_Long,   RMSE_XGB_Long
+    )
+  
+  if(nrow(df_target)==0) {
+    cat(" → Geen data voor target:", t, "\n\n")
+    next
+  }
+  
+  # 2) Pivot naar long, recode labels, en de-normaliseren
+  df_long <- df_target %>%
+    pivot_longer(
+      cols = starts_with("RMSE_"),
+      names_to  = "Model_Dataset",
+      values_to = "RMSE"
+    ) %>%
+    mutate(
+      Model_Dataset = recode(Model_Dataset,
+        "RMSE_LM_All"        = "LM All",
+        "RMSE_RF_All"        = "RF All",
+        "RMSE_Hybrid_All"    = "Hybrid All",
+        "RMSE_XGB_All"       = "XGB All",
+        "RMSE_LM_Group1"     = "LM Group1",
+        "RMSE_RF_Group1"     = "RF Group1",
+        "RMSE_Hybrid_Group1" = "Hybrid Group1",
+        "RMSE_XGB_Group1"    = "XGB Group1",
+        "RMSE_LM_Group2"     = "LM Group2",
+        "RMSE_RF_Group2"     = "RF Group2",
+        "RMSE_Hybrid_Group2" = "Hybrid Group2",
+        "RMSE_XGB_Group2"    = "XGB Group2",
+        "RMSE_LM_Group3"     = "LM Group3",
+        "RMSE_RF_Group3"     = "RF Group3",
+        "RMSE_Hybrid_Group3" = "Hybrid Group3",
+        "RMSE_XGB_Group3"    = "XGB Group3",
+        "RMSE_LM_Long"       = "LM Long",
+        "RMSE_RF_Long"       = "RF Long",
+        "RMSE_Hybrid_Long"   = "Hybrid Long",
+        "RMSE_XGB_Long"      = "XGB Long"
+      ),
+      Train_Group = word(Model_Dataset, 2)
+    ) %>%
+    # 3) De-normaliseren: alles behalve “Long” terugvermenigvuldigen
+    mutate(
+      RMSE = if_else(
+        str_detect(Model_Dataset, "Long$"),
+        RMSE,
+        RMSE * Total_Prod_Hours
+      )
+    )
+  
+  # 4) Welke warehouse‐groepen heb je?
+  gs <- unique(df_long$Warehouse_Group)
+  cat(" → Warehouse Groups voor", t, ":", paste(gs, collapse=", "), "\n")
+  
+  # 5) Aggegregeerde tabel op absolute RMSE
+  agg_summary <- df_long %>%
+    group_by(Warehouse_Group, Model_Dataset, Train_Group) %>%
+    summarise(Mean_RMSE = mean(RMSE, na.rm=TRUE), .groups="drop")
+  
+  # 6) Maak per groep een barplot
+  for(grp in gs) {
+    pl <- agg_summary %>%
+      filter(Warehouse_Group == grp) %>%
+      mutate(
+        Model_Dataset = factor(
+          Model_Dataset,
+          levels = Model_Dataset[order(-Mean_RMSE)]
+        )
+      ) %>%
+      ggplot(aes(x = Model_Dataset, y = Mean_RMSE, fill = Train_Group)) +
+      geom_col(position="dodge") +
+      labs(
+        title = paste("Average absolute RMSE voor", t, "in Warehouse Group", grp),
+        x     = "Model en Training Group",
+        y     = "Average RMSE (absolute)"
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(pl)
+  }
+  
+  # 7) Samenvattende tabel
+  cat("\nSamenvattende tabel voor target:", t, "\n")
+  kable(agg_summary,
+        caption = paste("Aggregated Average absolute RMSE voor", t)) %>%
+    print()
+  
+  cat("\n------------------------------\n")
+}
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(knitr)
+library(ggplot2)
+
+library(dplyr)
+
+
+
+# Even controleren
+names(combined_df)
+
+
+
+# Definieer de lijst met target-waarden (gebruik dezelfde spelling als in combined_df)
+targets <- c("Teamleader", "Supervisor", "Administration", 
+             "Operational.Manager", "BSO", "Key.Account.Manager")
+
+for(t in targets) {
+  cat("Processing target:", t, "\n")
+  
+  # 1) Filter + selecteer alle Mean_* kolommen: geaggregeerd én long
+  df_target <- combined_df %>% 
+    filter(Target == t) %>%
+    select(
+      Warehouse, Warehouse_Group, Target, True_Mean,
+      # geaggregeerde mean‐kolommen
+      Mean_LM_All,    Mean_RF_All,    Mean_Hybrid_All,    Mean_XGB_All,
+      Mean_LM_Group1, Mean_RF_Group1, Mean_Hybrid_Group1, Mean_XGB_Group1,
+      Mean_LM_Group2, Mean_RF_Group2, Mean_Hybrid_Group2, Mean_XGB_Group2,
+      Mean_LM_Group3, Mean_RF_Group3, Mean_Hybrid_Group3, Mean_XGB_Group3,
+      # long‐format mean‐kolommen
+      Mean_LM_Long,   Mean_RF_Long,   Mean_Hybrid_Long,   Mean_XGB_Long
+    )
+  
+  if(nrow(df_target) == 0) {
+    cat(" → Geen data voor target:", t, "\n\n")
+    next
+  }
+  
+  # 2) Pivot naar long, recode labels inclusief long‐format
+  df_long <- df_target %>% 
+    pivot_longer(
+      cols = starts_with("Mean_"),
+      names_to = "Model_Dataset",
+      values_to = "Mean_Prediction"
+    ) %>%
+    filter(True_Mean != 0) %>%      # voorkom deling door 0
+    mutate(
+      Model_Dataset = recode(Model_Dataset,
+        # geaggregeerd
+        "Mean_LM_All"        = "LM All",
+        "Mean_RF_All"        = "RF All",
+        "Mean_Hybrid_All"    = "Hybrid All",
+        "Mean_XGB_All"       = "XGB All",
+        "Mean_LM_Group1"     = "LM Group1",
+        "Mean_RF_Group1"     = "RF Group1",
+        "Mean_Hybrid_Group1" = "Hybrid Group1",
+        "Mean_XGB_Group1"    = "XGB Group1",
+        "Mean_LM_Group2"     = "LM Group2",
+        "Mean_RF_Group2"     = "RF Group2",
+        "Mean_Hybrid_Group2" = "Hybrid Group2",
+        "Mean_XGB_Group2"    = "XGB Group2",
+        "Mean_LM_Group3"     = "LM Group3",
+        "Mean_RF_Group3"     = "RF Group3",
+        "Mean_Hybrid_Group3" = "Hybrid Group3",
+        "Mean_XGB_Group3"    = "XGB Group3",
+        # long‐format
+        "Mean_LM_Long"       = "LM Long",
+        "Mean_RF_Long"       = "RF Long",
+        "Mean_Hybrid_Long"   = "Hybrid Long",
+        "Mean_XGB_Long"      = "XGB Long"
+      ),
+      Train_Group = word(Model_Dataset, 2),
+      # 3) Bereken % deviation
+      Perc_Deviation = abs(Mean_Prediction - True_Mean) / True_Mean * 100
+    )
+  
+  # 4) Welke warehouse‐groepen heb je?
+  gs <- unique(df_long$Warehouse_Group)
+  cat(" → Warehouse Groups voor", t, ":", paste(gs, collapse=", "), "\n")
+  
+  # 5) Aggregeer gemiddelde % deviation per groep/model
+  agg_summary <- df_long %>%
+    group_by(Warehouse_Group, Model_Dataset, Train_Group) %>%
+    summarise(Avg_Perc_Deviation = mean(Perc_Deviation, na.rm=TRUE), .groups="drop")
+  
+  # 6) Plot per groep
+  for(grp in gs) {
+    df_grp <- agg_summary %>% filter(Warehouse_Group == grp) %>%
+      mutate(
+        Model_Dataset = factor(
+          Model_Dataset, 
+          levels = Model_Dataset[order(Avg_Perc_Deviation)]
+        )
+      )
+    
+    p <- ggplot(df_grp, aes(x = Model_Dataset, y = Avg_Perc_Deviation, fill = Train_Group)) +
+      geom_col(position="dodge") +
+      labs(
+        title = paste("Average % Deviation voor", t, "in Warehouse Group", grp),
+        x = "Model en Training Group",
+        y = "Average % Deviation"
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p)
+  }
+  
+  # 7) Overzichtstabel
+  cat("\nSamenvattende tabel voor target:", t, "\n")
+  kable(agg_summary, caption = paste("Aggregated Avg % Deviation voor", t)) %>% print()
+  cat("\n------------------------------\n")
+}
+
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(stringr)   # voor str_detect()
+
+# 1) Definieer targets en warehouses
+targets    <- c("Teamleader", "Supervisor", "Administration", 
+                "Operational.Manager", "BSO", "Key.Account.Manager")
+warehouses <- c("Nilfisk BE", "Stiga SPP", "Delonghi", "O&M Halyard",
+                "Volvo CVA", "Volvopac")
+
+# 2) Optioneel: maak labels voor de plot-titels
+warehouse_labels <- setNames(paste("warehouse", seq_along(warehouses)), warehouses)
+
+# 3) Loop per warehouse en per target
+for (wh in warehouses) {
+  cat("Processing warehouse:", wh, "\n")
+  
+  for (t in targets) {
+    cat("  Processing target:", t, "\n")
+    
+    # Stap A: filter op warehouse + target
+    df_target <- combined_df %>%
+      filter(Warehouse == wh, Target == t)
+    
+    # Stap B: verwijder álle kolomnamen die “RMSE” of “MSE” in hun naam hebben
+    #          (dit pakt dus ook kolommen als “Mean_LM_RMSE”)
+    df_target <- df_target %>%
+      select(-matches("RMSE"), -matches("MSE"))
+    
+    if (nrow(df_target) == 0) {
+      cat("    Geen data voor target", t, "in", wh, "\n")
+      next
+    }
+    
+    # Stap C: kies nu wél alleen de kolommen die beginnen met “Mean_”
+    #          (na de vorige stap bevat df_target geen RMSE/MSE-kolommen meer)
+    pred_mean_cols <- df_target %>%
+      select(starts_with("Mean_")) %>%
+      names()
+    
+    cat("    Found mean‐cols (zonder RMSE/MSE):", paste(pred_mean_cols, collapse = ", "), "\n")
+    
+    # Stap D: naar long‐form
+    df_long <- df_target %>%
+      pivot_longer(
+        all_of(pred_mean_cols),
+        names_to  = "Model_Prediction",
+        values_to = "Prediction"
+      )
+    
+    # Stap E: plotten
+    label <- warehouse_labels[wh]
+    
+    p <- ggplot(df_long, aes(
+            x = Model_Prediction,
+            y = Prediction,
+            fill = Model_Prediction
+          )) +
+      geom_col(position = "dodge") +
+      geom_hline(
+        yintercept = df_target$True_Mean,
+        color = "red", linetype = "dashed", size = 1
+      ) +
+      labs(
+        title    = paste("Predicted vs True Mean for", label, "-", t),
+        subtitle = "Red dashed line = True_Mean",
+        x        = "Model & Dataset",
+        y        = "Mean value"
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p)
+  }
+  cat("\n")
+}
+
+```
+
+```{r error_distribution, echo=TRUE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1) Zet al je voorspellingen om naar long-form met absolute %-deviatie
+error_df <- final_wide_df %>% 
+  pivot_longer(
+    cols = starts_with("Mean_"), 
+    names_to  = "Model_Prediction", 
+    values_to = "Predicted_Mean"
+  ) %>%
+  separate(
+    Model_Prediction,
+    into = c("Type","Model","Dataset"),
+    sep = "_",
+    extra = "merge"
+  ) %>%
+  mutate(
+    AbsPercDev = abs(Predicted_Mean - True_Mean) / True_Mean * 100
+  )
+
+# 2) Percentielen en drempel‐shares (10%, 25%, 50%)
+error_summary <- error_df %>%
+  group_by(Model, Dataset, Target) %>%
+  summarise(
+    p50       = quantile(AbsPercDev, 0.50, na.rm = TRUE),
+    p75       = quantile(AbsPercDev, 0.75, na.rm = TRUE),
+    p90       = quantile(AbsPercDev, 0.90, na.rm = TRUE),
+    p95       = quantile(AbsPercDev, 0.95, na.rm = TRUE),
+    within_10 = mean(AbsPercDev <= 10, na.rm = TRUE) * 100,
+    within_25 = mean(AbsPercDev <= 25, na.rm = TRUE) * 100,
+    within_50 = mean(AbsPercDev <= 50, na.rm = TRUE) * 100
+  ) %>%
+  ungroup()
+
+print(error_summary)
+
+# 3) ECDF‐plot van de %-deviaties
+ggplot(error_df, aes(x = AbsPercDev, colour = Model)) +
+  stat_ecdf(geom = "step", size = 1) +
+  facet_wrap(~ Dataset) +
+  labs(
+    title = "ECDF of Absolute %-Deviation by Model & Dataset",
+    x = "Absolute % Deviation",
+    y = "Empirical CDF"
+  ) +
+  theme_minimal()
+
+```
+
+```{r error_distribution_by_group, echo=TRUE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1) Reshape to long form with absolute %-deviations, carrying Warehouse_Group along
+error_df <- final_wide_df %>% 
+  pivot_longer(
+    cols = starts_with("Mean_"), 
+    names_to  = "Model_Prediction", 
+    values_to = "Predicted_Mean"
+  ) %>%
+  separate(Model_Prediction, into = c("MeanPrefix","Model","Dataset"), sep = "_", extra = "merge") %>%
+  mutate(
+    AbsPercDev = abs(Predicted_Mean - True_Mean) / True_Mean * 100
+  )
+
+# 2) Summarize per Warehouse_Group, Model, Dataset, Target with new thresholds
+error_summary_by_group <- error_df %>%
+  group_by(Warehouse_Group, Model, Dataset, Target) %>%
+  summarise(
+    p50       = quantile(AbsPercDev, 0.50, na.rm = TRUE),
+    p75       = quantile(AbsPercDev, 0.75, na.rm = TRUE),
+    p90       = quantile(AbsPercDev, 0.90, na.rm = TRUE),
+    p95       = quantile(AbsPercDev, 0.95, na.rm = TRUE),
+    within_10 = mean(AbsPercDev <= 10, na.rm = TRUE) * 100,
+    within_25 = mean(AbsPercDev <= 25, na.rm = TRUE) * 100,
+    within_50 = mean(AbsPercDev <= 50, na.rm = TRUE) * 100
+  ) %>%
+  ungroup()
+
+# 3) Print summaries separately for each Warehouse_Group
+for(grp in unique(error_summary_by_group$Warehouse_Group)) {
+  cat("=== Summary for", grp, "===\n")
+  print(error_summary_by_group %>% filter(Warehouse_Group == grp))
+  cat("\n")
+}
+
+# 4) ECDF plots faceted by Warehouse_Group and Dataset
+ggplot(error_df, aes(x = AbsPercDev, colour = Model)) +
+  stat_ecdf(size = 1) +
+  facet_grid(Warehouse_Group ~ Dataset) +
+  labs(
+    title = "ECDF of Absolute %-Deviation by Group, Model & Dataset",
+    x = "Absolute % Deviation",
+    y = "Empirical CDF"
+  ) +
+  theme_minimal()
+
+```
