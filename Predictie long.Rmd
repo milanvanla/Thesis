@@ -1,0 +1,557 @@
+---
+title: "Xg Boost"
+output: html_document
+date: "2025-03-28"
+---
+
+```{r setup}
+long_df_grouped <- readRDS("long_df_grouped.rds")
+cat("long_df_grouped is ingeladen (n =", nrow(long_df_grouped), "rijen, p =", ncol(long_df_grouped), "kolommen)\n")
+head(long_df_grouped)
+```
+
+```{r}
+library(randomForest)
+
+# 1) Laad je data
+long_df_grouped <- readRDS("long_df_grouped.rds")
+colnames(long_df_grouped) <- make.names(colnames(long_df_grouped))
+
+# 2) Definieer je target en je “legitieme” predictors
+target_var  <- "Teamleader"
+all_vars    <- colnames(long_df_grouped)
+
+# alleen ratio_… en totalen:
+ratio_vars <- grep("^(A_|B_|C_|D_)", all_vars, value = TRUE)
+total_vars  <- c("TOTAL.Prod..Hours", "TOTAL.E.Times", "TOTAL.V.Times")
+predictor_vars <- intersect(all_vars, c(ratio_vars, total_vars))
+
+# 3) Bouw je RF-matrix
+df_rf <- long_df_grouped[, c(target_var, predictor_vars), drop = FALSE]
+df_rf[] <- lapply(df_rf, as.numeric)
+df_rf[is.na(df_rf)] <- 0                # fill NA → 0
+
+# 4) Fit Random Forest
+set.seed(123)
+rf_model <- randomForest(
+  formula = as.formula(paste(target_var, "~ .")),
+  data       = df_rf,
+  ntree      = 500,
+  importance = TRUE
+)
+
+# 5) Haal importance op en sorteer
+imp <- importance(rf_model)
+if (!"%IncMSE" %in% colnames(imp)) stop("Geen %IncMSE gevonden in importance()")
+
+# pak top-10
+top10 <- sort(imp[,"%IncMSE"], decreasing = TRUE)[1:10]
+
+# 6) Toon ze
+print(top10)
+
+```
+
+```{r}
+library(dplyr)
+
+# 1) Laad je data
+long_df_grouped <- readRDS("long_df_grouped.rds")
+colnames(long_df_grouped) <- make.names(colnames(long_df_grouped))
+
+# 2) Definieer al je targets en de gemeenschappelijke predictor-set
+target_vars <- c(
+  "Teamleader", "Supervisor", "Administration",
+  "Operational.Manager", "BSO", "Key.Account.Manager"
+)
+
+all_vars   <- colnames(long_df_grouped)
+ratio_vars <- grep("^(A_|B_|C_|D_)", all_vars, value = TRUE)
+total_vars <- c("TOTAL.Prod..Hours", "TOTAL.E.Times", "TOTAL.V.Times")
+predictors <- intersect(all_vars, c(ratio_vars, total_vars))
+
+# 3) Maak een lijst om de top-10 van elke target in op te slaan
+top10_list <- list()
+
+set.seed(123)
+for (target_var in target_vars) {
+  cat(">>> Target:", target_var, "\n")
+  
+  # 3a) Subset en clean
+  df_lm <- long_df_grouped %>%
+    select(all_of(c(target_var, predictors))) %>%
+    mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+    replace(is.na(.), 0)
+  
+  # 3b) Fit lineair model
+  formula_lm <- as.formula(paste(make.names(target_var), "~ ."))
+  lm_model   <- lm(formula_lm, data = df_lm)
+  
+  # 3c) Pak de coëfficiënten en bereken abs(t-waarde)
+  coefs <- summary(lm_model)$coefficients
+  coefs <- coefs[rownames(coefs) != "(Intercept)", , drop = FALSE]
+  
+  coefs_df <- as.data.frame(coefs)
+  coefs_df$Predictor <- rownames(coefs_df)
+  rownames(coefs_df) <- NULL
+  
+  coefs_df <- coefs_df %>%
+    rename(
+      Estimate = Estimate,
+      StdError = `Std. Error`,
+      tValue   = `t value`,
+      pValue   = `Pr(>|t|)`
+    ) %>%
+    mutate(abs_t = abs(tValue)) %>%
+    arrange(desc(abs_t))
+  
+  # 3d) Bewaar de top-10
+  top10 <- head(coefs_df, 10)
+  print(top10[, c("Predictor", "Estimate", "StdError", "tValue", "pValue")])
+  
+  top10_list[[target_var]] <- top10
+  cat("\n\n")
+}
+
+# Na afloop heb je in top10_list per target de top-10 predictors:
+# bv. top10_list$Supervisor, top10_list$BSO, etc.
+
+```
+
+```{r}
+library(dplyr)
+
+# 1) Laad en clean
+long_df_grouped <- readRDS("long_df_grouped.rds")
+colnames(long_df_grouped) <- make.names(colnames(long_df_grouped))
+
+# 2) Definieer targets en predictors
+target_vars <- c("Teamleader","Supervisor","Administration",
+                 "Operational.Manager","BSO","Key.Account.Manager")
+all_vars    <- colnames(long_df_grouped)
+
+ratio_vars  <- grep("^(A_|B_|C_|D_)", all_vars, value=TRUE)
+total_vars  <- c("TOTAL.Prod..Hours","TOTAL.E.Times","TOTAL.V.Times")
+predictors  <- intersect(all_vars, c(ratio_vars, total_vars))
+
+# 3) Loop over elke target en doe stepwise
+lm_models_long <- list()
+set.seed(123)
+
+for (target in target_vars) {
+  cat("=== Target:", target, "===\n")
+  
+  # subset & numeric + NA→0
+  df_m <- long_df_grouped %>%
+    select(all_of(c(target, predictors))) %>%
+    mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+    replace(is.na(.), 0)
+  
+  # formule
+  f <- as.formula(paste(make.names(target), "~", paste(predictors, collapse=" + ")))
+  
+  # fit full model & stepwise
+  full_mod  <- lm(f, data = df_m)
+  final_mod <- step(full_mod, direction="both", trace=0)
+  
+  # bewaar en toon
+  lm_models_long[[target]] <- final_mod
+  cat("R² voor", target, ":", summary(final_mod)$r.squared, 
+      "— variabelen:\n")
+  print(names(final_mod$coefficients)[-1])
+  cat("\n-----------------\n")
+}
+
+```
+
+```{r}
+library(dplyr)
+library(randomForest)
+
+# 1) Laad en clean je long-format data
+long_df_grouped <- readRDS("long_df_grouped.rds")
+colnames(long_df_grouped) <- make.names(colnames(long_df_grouped))
+
+# 2) Definieer je targets en predictors
+target_vars    <- c("Teamleader","Supervisor","Administration",
+                    "Operational.Manager","BSO","Key.Account.Manager")
+
+# alleen de ratio-groepen (A_,B_,C_,D_) en totalen als predictors
+all_vars     <- colnames(long_df_grouped)
+ratio_vars   <- grep("^(A_|B_|C_|D_)", all_vars, value = TRUE)
+total_vars   <- c("TOTAL.Prod..Hours","TOTAL.E.Times","TOTAL.V.Times")
+predictors   <- intersect(all_vars, c(ratio_vars, total_vars))
+
+# 3) Split 70/30
+set.seed(123)
+train_idx <- sample(nrow(long_df_grouped), size = 0.7 * nrow(long_df_grouped))
+train_df  <- long_df_grouped[train_idx, ]
+test_df   <- long_df_grouped[-train_idx, ]
+
+# 4) Initialiseer opslag
+lm_models  <- list()
+rf_models  <- list()
+performance <- data.frame(
+  Target = character(),
+  Model  = character(),
+  RMSE   = double(),
+  stringsAsFactors = FALSE
+)
+
+# 5) Loop over elke target, train & evalueer
+for (target in target_vars) {
+  cat("=== Target:", target, "===\n")
+  
+  # a) subset en maak numeriek + NA→0
+  df_tr <- train_df  %>% select(all_of(c(target, predictors))) %>%
+           mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+           replace(is.na(.), 0)
+  df_te <- test_df   %>% select(all_of(c(target, predictors))) %>%
+           mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+           replace(is.na(.), 0)
+  
+  # b) formule
+  form <- as.formula(paste(make.names(target), "~", paste(predictors, collapse = " + ")))
+  
+  # c) train lm
+  lm_mod <- lm(form, data = df_tr)
+  lm_models[[target]] <- lm_mod
+  
+  # d) train RF
+  rf_mod <- randomForest(form, data = df_tr, ntree = 500)
+  rf_models[[target]] <- rf_mod
+  
+  # e) voorspel
+  lm_pred     <- predict(lm_mod, newdata = df_te)
+  rf_pred     <- predict(rf_mod, newdata = df_te)
+  hybrid_pred <- (lm_pred + rf_pred)/2
+  
+  actual      <- df_te[[target]]
+  
+  # f) bereken RMSE
+  lm_rmse     <- sqrt(mean((actual - lm_pred)^2,    na.rm = TRUE))
+  rf_rmse     <- sqrt(mean((actual - rf_pred)^2,    na.rm = TRUE))
+  hybrid_rmse <- sqrt(mean((actual - hybrid_pred)^2,na.rm = TRUE))
+  
+  # g) print een korte check
+  cat(" Linear   RMSE:", lm_rmse,    "\n")
+  cat(" Random F RMSE:", rf_rmse,    "\n")
+  cat(" Hybrid   RMSE:", hybrid_rmse,"\n\n")
+  
+  # h) sla op
+  performance <- rbind(performance,
+    data.frame(Target=target, Model="Linear",    RMSE=lm_rmse,    stringsAsFactors=FALSE),
+    data.frame(Target=target, Model="RandomForest",RMSE=rf_rmse,  stringsAsFactors=FALSE),
+    data.frame(Target=target, Model="Hybrid",    RMSE=hybrid_rmse,stringsAsFactors=FALSE)
+  )
+}
+
+# 6) Tot slot: overzichtelijk resultaat
+cat("== Overzicht RMSE per target/model ==\n")
+print(performance)
+
+```
+
+```{r}
+library(randomForest)
+library(xgboost)
+
+# 1) Laad je long-form data
+long_df_grouped <- readRDS("long_df_grouped.rds")
+colnames(long_df_grouped) <- make.names(colnames(long_df_grouped))
+
+# 2) Definieer je targets en je predictors (ratio‐groepen + totalen)
+target_vars   <- c("Teamleader","Supervisor","Administration",
+                   "Operational.Manager","BSO","Key.Account.Manager")
+all_vars      <- colnames(long_df_grouped)
+ratio_vars    <- grep("^(A_|B_|C_|D_)", all_vars, value = TRUE)
+total_vars    <- c("TOTAL.Prod..Hours","TOTAL.E.Times","TOTAL.V.Times")
+predictors    <- intersect(all_vars, c(ratio_vars, total_vars))
+
+# 3) Split 70/30
+set.seed(123)
+train_idx <- sample(nrow(long_df_grouped),
+                    size = 0.7 * nrow(long_df_grouped))
+train_df  <- long_df_grouped[train_idx, ]
+test_df   <- long_df_grouped[-train_idx, ]
+
+# 4) Initialiseer opslag
+perf_xgb       <- data.frame(Target=character(), RMSE=double(), stringsAsFactors=FALSE)
+xgb_models_all <- list()
+
+# 5) Loop over jouw zes targets
+for(target in target_vars) {
+  cat("→ Stacked XGB voor target:", target, "\n")
+  
+  # a) subset én NA→0
+  tr <- train_df %>%
+        select(all_of(c(target,predictors))) %>%
+        mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+        replace(is.na(.), 0)
+  te <- test_df  %>%
+        select(all_of(c(target,predictors))) %>%
+        mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+        replace(is.na(.), 0)
+  
+  # b) basis-modellen
+  form <- as.formula(paste(make.names(target),"~",paste(predictors,collapse=" + ")))
+  lm_mod <- lm(form, data=tr)
+  rf_mod <- randomForest(form, data=tr, ntree=500)
+  
+  # c) maak stack-features
+  train_preds <- data.frame(
+    pred_lm     = predict(lm_mod, newdata=tr),
+    pred_rf     = predict(rf_mod, newdata=tr),
+    pred_hybrid = (predict(lm_mod,tr)+predict(rf_mod,tr))/2
+  )
+  test_preds <- data.frame(
+    pred_lm     = predict(lm_mod, newdata=te),
+    pred_rf     = predict(rf_mod, newdata=te),
+    pred_hybrid = (predict(lm_mod,te)+predict(rf_mod,te))/2
+  )
+  
+  # d) train XGB-meta-model
+  dtrain_meta <- xgb.DMatrix(data=as.matrix(train_preds), label=tr[[target]])
+  xgb_meta <- xgb.train(
+    params  = list(objective="reg:squarederror",
+                   eta=0.05, max_depth=6,
+                   subsample=0.8,
+                   colsample_bytree=0.8),
+    data    = dtrain_meta,
+    nrounds = 200,
+    verbose = 0
+  )
+  xgb_models_all[[target]] <- xgb_meta
+  
+  # e) predict & RMSE op test
+  final_pred  <- predict(xgb_meta, xgb.DMatrix(as.matrix(test_preds)))
+  rmse_target <- sqrt(mean((te[[target]] - final_pred)^2, na.rm=TRUE))
+  
+  perf_xgb <- rbind(perf_xgb,
+                    data.frame(Target=target, RMSE=rmse_target,
+                               stringsAsFactors=FALSE))
+  
+  cat("   RMSE (Stacked-XGB):", round(rmse_target,4), "\n\n")
+}
+
+# 6) resultaat
+cat("=== Overzicht Stacked-XGB RMSE per target ===\n")
+print(perf_xgb)
+
+```
+
+```{r}
+aggregated_by_warehouse <- readRDS("aggregated_by_warehouse.rds")
+lapply(aggregated_by_warehouse, names)
+
+
+# 1) kolomnamen mappen naar je training (“TeamLeader_Agg” → “Teamleader”, “TOTAL Prod. Hours” → “Prod. Hours”, enz.)
+aggregated_by_warehouse <- lapply(aggregated_by_warehouse, function(df) {
+  cn <- trimws(colnames(df))
+  cn <- gsub("TeamLeader_Agg",       "Teamleader",    cn)
+  cn <- gsub("Supervisor_Agg",       "Supervisor",    cn)
+  cn <- gsub("Administration_Agg",    "Administration", cn)
+  cn <- gsub("TOTAL Prod. Hours",    "Total.Prod..Hours",   cn)
+  cn <- gsub("TOTAL E-Times",        "Total.E.Times",       cn)
+  cn <- gsub("TOTAL V-Times",        "Total.V.Times",       cn)
+  cn <- gsub("Key Account Manager",        "Key.Account.Manager",       cn)
+  cn <- gsub("Operational Manager",        "Operational.Manager",       cn)
+
+
+  colnames(df) <- cn
+  df
+})
+
+# 2) filter warehouses met te weinig “Prod. Hours”
+aggregated_by_warehouse <- Filter(function(df) {
+  if (!"Prod. Hours"%in%colnames(df)) return(FALSE)
+  avg <- mean(as.numeric(df[["Prod. Hours"]]), na.rm=TRUE)
+  !is.na(avg) && avg >= 20
+}, aggregated_by_warehouse)
+
+```
+```{r}
+library(randomForest)
+library(xgboost)
+
+# Inladen & schoonmaken
+long_df_grouped <- readRDS("long_df_grouped.rds")
+colnames(long_df_grouped) <- make.names(colnames(long_df_grouped))
+
+# Definieer targets en predictors
+target_vars    <- c("Teamleader","Supervisor","Administration",
+                    "Operational.Manager","BSO","Key.Account.Manager")
+predictor_vars <- setdiff(colnames(long_df_grouped),
+                          c(target_vars, "Warehouse", "Week"))
+
+# Zet alles numeric & NA→0 in één go
+df_full <- long_df_grouped %>%
+  select(all_of(c(predictor_vars, target_vars))) %>%
+  mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+  replace(is.na(.), 0)
+
+set.seed(123)
+lm_models_long  <- list()
+rf_models_long  <- list()
+xgb_models_long <- list()
+
+for(tgt in target_vars){
+  # 1) lineair model
+  fm <- as.formula(paste(tgt, "~", paste(predictor_vars, collapse = " + ")))
+  lm_models_long[[tgt]] <- lm(fm, data = df_full)
+  
+  # 2) random forest
+  rf_models_long[[tgt]] <- randomForest(fm, data = df_full,
+                                        ntree = 500, importance = TRUE)
+  
+  # 3) stacked XGB
+  # – maak de stack‐features
+  pred_lm     <- predict(lm_models_long[[tgt]], newdata = df_full)
+  pred_rf     <- predict(rf_models_long[[tgt]], newdata = df_full)
+  pred_hybrid <- (pred_lm + pred_rf) / 2
+  train_preds <- data.frame(pred_lm, pred_rf, pred_hybrid)
+  
+  dtrain <- xgb.DMatrix(data  = as.matrix(train_preds),
+                        label = df_full[[tgt]])
+  xgb_models_long[[tgt]] <- xgb.train(
+    params  = list(objective="reg:squarederror",
+                   eta=0.05, max_depth=6,
+                   subsample=0.8, colsample_bytree=0.8),
+    data    = dtrain,
+    nrounds = 200,
+    verbose = 0
+  )
+}
+
+```
+
+
+```{r}
+performance_list <- lapply(unique(long_df_grouped$Warehouse), function(wh) {
+  # subset en schoon
+  df_wh <- long_df_grouped %>%
+    filter(Warehouse == wh) %>%
+    select(all_of(c(predictor_vars, target_vars))) %>%
+    mutate(across(everything(), ~ as.numeric(as.character(.)))) %>%
+    replace(is.na(.), 0)
+  
+  wh_perf <- data.frame()  # lege opvang
+  
+  for(model_type in c("LM","RF","Hybrid","XGB")) {
+    for(tgt in target_vars) {
+      # predicties
+      lm_p     <- predict(lm_models_long[[tgt]], newdata = df_wh)
+      rf_p     <- predict(rf_models_long[[tgt]], newdata = df_wh)
+      hybrid_p <- (lm_p + rf_p)/2
+      xgb_p    <- predict(
+        xgb_models_long[[tgt]],
+        xgb.DMatrix(as.matrix(data.frame(
+          pred_lm     = lm_p,
+          pred_rf     = rf_p,
+          pred_hybrid = hybrid_p
+        )))
+      )
+      
+      # kies
+      preds <- switch(model_type,
+        LM     = lm_p,
+        RF     = rf_p,
+        Hybrid = hybrid_p,
+        XGB    = xgb_p
+      )
+      
+      actual    <- df_wh[[tgt]]
+      rmse_val  <- sqrt(mean((actual - preds)^2, na.rm=TRUE))
+      mse_val   <- mean((actual - preds)^2, na.rm=TRUE)
+      mean_pred <- mean(preds, na.rm=TRUE)
+      true_mean <- mean(actual, na.rm=TRUE)
+      
+      wh_perf <- rbind(wh_perf, data.frame(
+        Warehouse   = wh,
+        Model       = model_type,
+        Target      = tgt,
+        RMSE        = rmse_val,
+        MSE         = mse_val,
+        Mean_Pred   = mean_pred,
+        True_Mean   = true_mean,
+        stringsAsFactors = FALSE
+      ))
+    }
+  }
+  
+  wh_perf
+})
+
+final_perf_long <- bind_rows(performance_list)
+print(final_perf_long)
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1) Pivot naar lange vorm
+tidy_perf_long <- final_perf_long %>%
+  pivot_longer(
+    cols = c(RMSE, MSE, Mean_Pred),
+    names_to  = "Metric",
+    values_to = "Value"
+  )
+
+# Bekijk of het gelukt is
+print(head(tidy_perf_long))
+
+# 2) Voorbeeld­visualisatie: RMSE per Warehouse én per Target
+ggplot(
+  tidy_perf_long %>% filter(Metric == "RMSE"),
+  aes(x = Warehouse, y = Value, fill = Model)
+) +
+  geom_boxplot() +
+  facet_wrap(~ Target) +
+  labs(
+    title = "RMSE per Warehouse per Target (Long Format)",
+    x     = "Warehouse",
+    y     = "RMSE"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# 1) “Tidy” maken: van wide (RMSE/MSE/Mean_Pred kolommen) naar long
+tidy_long <- final_perf_long %>%
+  pivot_longer(
+    cols      = c(RMSE, MSE, Mean_Pred),
+    names_to  = "Metric",
+    values_to = "Value"
+  )
+
+# 2) Pivot weer wijd, zodat je per Warehouse × Target één rij krijgt
+wide_long <- tidy_long %>%
+  pivot_wider(
+    id_cols     = c(Warehouse, Target, True_Mean),
+    names_from  = c(Model, Metric),
+    values_from = Value,
+    names_sep   = "_"     # geeft bv. LM_RMSE, RF_Mean_Pred, etc.
+  )
+
+# Resultaat bekijken
+print(wide_long)
+
+```
+
+```{r}
+# Sla het wide_long dataframe op met een nieuwe bestandsnaam
+saveRDS(wide_long, file = "wide_long_performance.rds")
+write.csv(wide_long, file = "wide_long_performance.csv", row.names = FALSE)
+
+```
+
