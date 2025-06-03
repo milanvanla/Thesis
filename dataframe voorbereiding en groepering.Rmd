@@ -1,0 +1,1182 @@
+---
+title: "Merged"
+output: html_document
+date: "2025-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+# split_by_warehouse.R
+
+# Laad benodigde packages
+library(readxl)
+library(dplyr)
+
+# 1. Lees de Excel-file in zonder kolomnamen te gebruiken (zodat je alle rijen behoudt)
+#raw_df <- read_excel("C:/Users/Milan/Desktop/Data analyse thesis/Data thesis.xlsx", col_names = FALSE)
+
+# Bekijk even de eerste paar rijen om te controleren dat je de juiste rijen hebt
+# head(raw_df)
+
+# 2. Haal de magazijnnamen op uit de tweede rij
+# Dit levert een vector met per kolom de naam van het magazijn
+warehouse_names <- as.character(unlist(raw_df[2, ]))
+# Indien er extra spaties of lege waarden zijn, kun je deze eventueel schoonmaken:
+warehouse_names <- trimws(warehouse_names)
+
+# 3. Verwijder de eerste twee rijen zodat alleen de daadwerkelijke data overblijft
+# (Pas dit aan als je toch bepaalde informatie uit de eerste rij wilt behouden.)
+data_df <- raw_df[-c(1, 2), ]
+
+# 4. (Optioneel) Indien je de eerste rij van de data (nu rij 3 in het origineel) als kolomnamen wilt gebruiken:
+# colnames(data_df) <- as.character(unlist(data_df[1, ]))
+# data_df <- data_df[-1, ]
+
+# 5. Splits de dataset per magazijn
+# De veronderstelling is dat de volgorde van de kolommen overeenkomt met de volgorde van magazijnnamen
+unique_warehouses <- unique(warehouse_names)
+warehouse_data_list <- list()
+
+# ---- Stap 0: Verwijder ongewenste warehouses ----
+#to_remove <- c("Volvo Cars", "Volvo CVA", "Volvopac")
+#warehouse_data_list <- warehouse_data_list[! names(warehouse_data_list) %in% to_remove]
+
+
+for (wh in unique_warehouses) {
+  # Vind de kolomindex(en) waarvoor de tweede rij gelijk is aan de huidige magazijnnaam
+  cols <- which(warehouse_names == wh)
+  
+  # Haal de corresponderende kolommen op uit de dataset
+  warehouse_data <- data_df[, cols]
+  
+  # Sla dit resultaat op in een lijst, waarbij de naam van het element het magazijn is
+  warehouse_data_list[[wh]] <- warehouse_data
+}
+
+# 6. Bekijk de namen van de magazijnen waarvoor data beschikbaar is
+print(names(warehouse_data_list))
+
+# 7. (Optioneel) Sla per magazijn de gesplitste data op als een CSV-bestand
+#for (wh in names(warehouse_data_list)) {
+  # Maak een bestandsnaam, bijvoorbeeld "warehouse_[magazijnnaam].csv"
+ # outfile <- paste0("warehouse_", gsub("[[:space:]]+", "_", wh), ".csv")
+  #write.csv(warehouse_data_list[[wh]], file = outfile, row.names = FALSE)
+#}
+
+# Hiermee heb je nu per magazijn een aparte dataset.
+
+```
+```{r}
+# Veronderstel dat warehouse_data_list een lijst is met per magazijn een data.frame
+warehouse_data_list_clean <- lapply(warehouse_data_list, function(df) {
+  
+  # Controleer of er voldoende rijen aanwezig zijn
+  if(nrow(df) < 5) {
+    warning("Dataset bevat minder dan 5 rijen. Overslaan.")
+    return(df)
+  }
+  
+  # Verwijder de eerste 4 rijen
+  df <- df[-c(1, 2, 4, 5, 6), ]
+
+  #gebruik de (nu eerste) rij als kolomnamen
+  colnames(df) <- as.character(df[1, ])
+  
+  # Verwijder de rij met de kolomnamen uit de data
+  df <- df[-1, ]
+  
+  # (Optioneel) Zet de kolommen om naar de juiste datatypes indien nodig
+  # df[] <- lapply(df, type.convert, as.is = TRUE)
+  
+  return(df)
+})
+
+# Filter: verwijder warehouses waarbij het gemiddelde van "TOTAL Prod. Hours" NA is of minder dan 20
+warehouse_data_list_clean <- warehouse_data_list_clean[!sapply(warehouse_data_list_clean, function(df) {
+  if("TOTAL Prod. Hours" %in% colnames(df)){
+    avg <- mean(as.numeric(df[["TOTAL Prod. Hours"]]), na.rm = TRUE)
+    is.na(avg) || avg < 20
+  } else {
+    TRUE  # als de kolom niet voorkomt, verwijder dan ook
+  }
+})]
+
+
+# Controleer bijvoorbeeld de eerste paar rijen van een magazijn:
+head(warehouse_data_list_clean[[3]])
+
+```
+
+
+```{r}
+# Maak een lijst waarin we de geüpdatete datasets per warehouse gaan opslaan
+warehouse_updated_list <- list()
+
+# Functie om ongewenste tekens te verwijderen en overtollige spaties weg te halen uit kolomnamen
+clean_names <- function(x) {
+  trimws(gsub("#", "", x))
+}
+
+# Loop door alle warehouses in de lijst
+for (wh in names(warehouse_data_list_clean)) {
+  
+  cat("Processing warehouse:", wh, "\n")
+  
+  # Haal de dataset op voor het huidige warehouse
+  warehouse_df <- warehouse_data_list_clean[[wh]]
+  
+  ######################
+  ## Query A: Ratio's op basis van de eerste Inbound/Outbound set
+  ######################
+  
+  # Bepaal indices voor "Inbound", "Outbound" en "VOLUMES"
+  inbound_indices <- which(colnames(warehouse_df) == "Inbound")
+  outbound_indices <- which(colnames(warehouse_df) == "Outbound")
+  volumes_idx <- which(colnames(warehouse_df) == "VOLUMES")
+  
+  # Als de kolom VOLUMES ontbreekt of er ontbreken Inbound/Outbound, sla Query A dan over
+  if(length(volumes_idx) == 0 || length(inbound_indices) < 1 || length(outbound_indices) < 1) {
+    cat("Query A: Niet alle vereiste kolommen aanwezig voor warehouse", wh, "\n")
+    group3_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+  } else {
+    # --- Definieer Group1 (Query A) ---
+    # Gebruik de eerste "Inbound" en de eerste "Outbound"
+    group1_inbound <- inbound_indices[1]
+    group1_outbound <- outbound_indices[1]
+    if((group1_inbound + 1) <= (group1_outbound - 1)) {
+      group1_A <- warehouse_df[, (group1_inbound + 1):(group1_outbound - 1), drop = FALSE]
+    } else {
+      group1_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+    }
+    
+    # --- Definieer Group2 (Query A) ---
+    inbound_after_volumes <- inbound_indices[inbound_indices > volumes_idx]
+    if(length(inbound_after_volumes) < 1) {
+      group2_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+    } else {
+      group2_inbound <- inbound_after_volumes[1]
+      outbound_after_group2 <- outbound_indices[outbound_indices > group2_inbound]
+      if(length(outbound_after_group2) < 1) {
+        group2_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+      } else {
+        group2_outbound <- outbound_after_group2[1]
+        if((group2_inbound + 1) <= (group2_outbound - 1)) {
+          group2_A <- warehouse_df[, (group2_inbound + 1):(group2_outbound - 1), drop = FALSE]
+        } else {
+          group2_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+        }
+      }
+    }
+    
+    # Initialiseer de ratio-kolommen voor Query A (aantal rijen gelijk aan die in warehouse_df)
+    group3_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+    
+    # Alleen doorgaan als er kolommen in zowel Group1 als Group2 zitten
+    if(ncol(group1_A) > 0 && ncol(group2_A) > 0) {
+      group1_A_names <- clean_names(colnames(group1_A))
+      group2_A_names <- clean_names(colnames(group2_A))
+      
+      # Loop over elke kolom in Group2 en zoek overeenkomst in Group1
+      for(i in seq_along(group2_A_names)) {
+        current_name <- group2_A_names[i]
+        match_idx <- which(group1_A_names == current_name)
+        if(length(match_idx) > 0) {
+          # Converteer naar numeriek (indien mogelijk)
+          num_col <- as.numeric(as.character(group2_A[[i]]))
+          den_col <- as.numeric(as.character(group1_A[[match_idx[1]]]))
+          ratio_col <- ifelse(den_col == 0, NA, num_col / den_col)
+          new_col_name <- paste0("ratio_A_", current_name)
+          group3_A[[new_col_name]] <- ratio_col
+        } else {
+          cat("Query A: Geen match gevonden voor kolom", colnames(group2_A)[i], "in warehouse", wh, "\n")
+        }
+      }
+    }
+  }
+  
+  ######################
+  ## Query B: Ratio's op basis van de kolommen tussen een Outbound en TOTAL Prod. Hours
+  ######################
+  
+  # Bepaal index voor "TOTAL Prod. Hours" en "Outbound"
+  total_prod_idx <- which(colnames(warehouse_df) == "TOTAL Prod. Hours")
+  outbound_indices <- which(colnames(warehouse_df) == "Outbound")  # herberekenen, mocht nodig
+  
+  if(length(total_prod_idx) == 0 || length(outbound_indices) == 0) {
+    cat("Query B: Vereiste kolommen ontbreken voor warehouse", wh, "\n")
+    group3_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+  } else {
+    # --- Definieer Group1 (Query B) ---
+    valid_outbounds <- outbound_indices[outbound_indices < total_prod_idx]
+    if(length(valid_outbounds) == 0) {
+      group1_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+    } else {
+      group1_outbound <- max(valid_outbounds)
+      if((group1_outbound + 1) < total_prod_idx) {
+        group1_B <- warehouse_df[, (group1_outbound + 1):(total_prod_idx - 1), drop = FALSE]
+      } else {
+        group1_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+      }
+    }
+    
+    # --- Definieer Group2 (Query B) ---
+    volumes_idx <- which(colnames(warehouse_df) == "VOLUMES")
+    if(length(volumes_idx) == 0) {
+      group2_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+    } else {
+      outbound_after_volumes <- outbound_indices[outbound_indices > volumes_idx]
+      if(length(outbound_after_volumes) < 1) {
+        group2_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+      } else {
+        group2_outbound <- outbound_after_volumes[1]
+        if(group2_outbound < ncol(warehouse_df)) {
+          group2_B <- warehouse_df[, (group2_outbound + 1):ncol(warehouse_df), drop = FALSE]
+        } else {
+          group2_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+        }
+      }
+    }
+    
+    # Initialiseer de ratio-kolommen voor Query B
+    group3_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+    
+    if(ncol(group1_B) > 0 && ncol(group2_B) > 0) {
+      group1_B_names <- clean_names(colnames(group1_B))
+      group2_B_names <- clean_names(colnames(group2_B))
+      
+      for(i in seq_along(group2_B_names)) {
+        current_name <- group2_B_names[i]
+        match_idx <- which(group1_B_names == current_name)
+        if(length(match_idx) > 0) {
+          num_col <- as.numeric(as.character(group2_B[[i]]))
+          den_col <- as.numeric(as.character(group1_B[[match_idx[1]]]))
+          ratio_col <- ifelse(den_col == 0, NA, num_col / den_col)
+          new_col_name <- paste0("ratio_B_", current_name)
+          group3_B[[new_col_name]] <- ratio_col
+        } else {
+          cat("Query B: Geen match gevonden voor kolom", colnames(group2_B)[i], "in warehouse", wh, "\n")
+        }
+      }
+    }
+  }
+  
+  ######################
+  ## Combineer de nieuwe kolommen met de originele dataset
+  ######################
+  # Zorg dat beide nieuwe groepen (group3_A en group3_B) dezelfde aantal rijen hebben als warehouse_df
+  if(nrow(group3_A) == 0) {
+    group3_A <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+  }
+  if(nrow(group3_B) == 0) {
+    group3_B <- data.frame(matrix(nrow = nrow(warehouse_df), ncol = 0))
+  }
+  
+  warehouse_df_updated <- cbind(warehouse_df, group3_A, group3_B)
+  
+  # Sla de geüpdatete dataset op in de lijst
+  warehouse_updated_list[[wh]] <- warehouse_df_updated
+  
+  cat("Warehouse", wh, "verwerkt.\n\n")
+}
+
+```
+```{r}
+# Impute missing values in each warehouse of warehouse_updated_list
+# en verwijder warehouses waarbij voor alle kolommen >=50% missende waarden zijn
+
+imputed_warehouse_list <- list()
+
+for (wh in names(warehouse_updated_list)) {
+  df <- warehouse_updated_list[[wh]]
+  
+  # Bereken per kolom de proportie missende waarden
+  missing_prop <- sapply(df, function(col) sum(is.na(col)) / length(col))
+  
+  # Als voor alle kolommen minstens 50% ontbreekt, verwijder dit warehouse
+  if (all(missing_prop >= 0.5)) {
+    cat("Warehouse", wh, "wordt verwijderd (alle relevante kolommen hebben >=50% missende waarden).\n")
+    next  # Sla dit warehouse over
+  } else {
+    # Maak een kopie van de data om NA's in te vullen
+    df_imputed <- df
+    # Voor iedere kolom die numeriek is en ten minste één geldige waarde bevat, vul NA's in met het kolomgemiddelde
+    for (colname in names(df_imputed)) {
+      if (is.numeric(df_imputed[[colname]]) && sum(!is.na(df_imputed[[colname]])) > 0) {
+        col_mean <- mean(df_imputed[[colname]], na.rm = TRUE)
+        df_imputed[[colname]][is.na(df_imputed[[colname]])] <- col_mean
+      }
+    }
+    imputed_warehouse_list[[wh]] <- df_imputed
+  }
+}
+
+# Update de warehouse_updated_list met de geïmputeerde data
+#warehouse_updated_list <- imputed_warehouse_list
+
+# Optioneel: bekijk een overzicht van de verwerkte warehouses
+cat("Warehouses behouden na imputatie:\n")
+print(names(warehouse_updated_list))
+
+```
+
+
+```{r}
+
+# -----------------------------
+# 1. Extractie van de relevante kolommen per warehouse
+# -----------------------------
+# Lijsten om de data voor ratio's, overhead en totalen op te slaan
+ratio_list    <- list()
+overhead_list <- list()
+total_list    <- list()
+
+# Loop door alle warehouses
+for (wh in names(warehouse_updated_list)) {
+  df <- warehouse_updated_list[[wh]]
+  
+  cat("=====================================\n")
+  cat("Warehouse:", wh, "\n")
+  
+  ## A. Ratio-kolommen: kolommen die beginnen met "ratio_A_" of "ratio_B_"
+  ratio_cols <- grep("^ratio_[AB]_", colnames(df), value = TRUE)
+  ratio_df <- df[, ratio_cols, drop = FALSE]
+  ratio_list[[wh]] <- ratio_df
+  
+  # Print aantal ratio-kolommen
+  cat("Aantal ratio-kolommen:", length(ratio_cols), "\n")
+  if(length(ratio_cols) > 0) {
+    cat("Ratio kolomnamen:", paste(ratio_cols, collapse = ", "), "\n")
+  } else {
+    cat("Geen ratio kolommen gevonden.\n")
+  }
+  
+  ## B. Overhead-kolommen:
+  # Zoek de indices van alle kolommen die 'overhead' heten (case-insensitive)
+  overhead_indices <- which(tolower(colnames(df)) == "overhead")
+  if (length(overhead_indices) >= 2) {
+    second_overhead_idx <- overhead_indices[2]
+    # Zoek de kolom "TOTAL Overhead"
+    total_overhead_idx <- which(colnames(df) == "TOTAL Overhead")
+    if (length(total_overhead_idx) > 0 && total_overhead_idx > second_overhead_idx) {
+      # Neem alle kolommen tussen de tweede "overhead" en "TOTAL Overhead" (exclusief deze twee)
+      overhead_df <- df[, (second_overhead_idx + 1):(total_overhead_idx - 1), drop = FALSE]
+    } else {
+      overhead_df <- data.frame()
+    }
+  } else {
+    overhead_df <- data.frame()
+  }
+  overhead_list[[wh]] <- overhead_df
+  
+  # Print aantal overhead-kolommen
+  cat("Aantal overhead-kolommen:", ncol(overhead_df), "\n")
+  if(ncol(overhead_df) > 0) {
+    cat("Overhead kolomnamen:", paste(colnames(overhead_df), collapse = ", "), "\n")
+  } else {
+    cat("Geen overhead kolommen gevonden.\n")
+  }
+  
+  ## C. Totalen: "TOTAL Prod. Hours", "TOTAL E-Times" en "TOTAL V-Times"
+  total_cols <- c("TOTAL Prod. Hours", "TOTAL E-Times", "TOTAL V-Times")
+  available_totals <- intersect(total_cols, colnames(df))
+  total_df <- df[, available_totals, drop = FALSE]
+  total_list[[wh]] <- total_df
+  
+  # Print beschikbare totaal-kolommen
+  cat("Aantal totalen kolommen:", length(available_totals), "\n")
+  if(length(available_totals) > 0) {
+    cat("Total kolomnamen:", paste(available_totals, collapse = ", "), "\n")
+  } else {
+    cat("Geen totalen kolommen gevonden.\n")
+  }
+  
+  cat("=====================================\n\n")
+}
+
+# -----------------------------
+# 2. Functie om per rij de data samen te voegen door op te tellen
+# -----------------------------
+aggregate_by_sum <- function(df_list) {
+  # Filter lege data.frames eruit
+  non_empty <- df_list[sapply(df_list, function(df) ncol(df) > 0)]
+  
+  if(length(non_empty) == 0) {
+    cat("Alle data.frames in de lijst zijn leeg.\n")
+    return(data.frame())
+  }
+  
+  # Bepaal de unie van alle kolomnamen in de niet-lege data.frames
+  all_cols <- unique(unlist(lapply(non_empty, colnames)))
+  # Gebruik de eerste niet-lege data.frame om het aantal rijen te bepalen
+  n_rows <- nrow(non_empty[[1]])
+  cat("Aantal rijen voor aggregatie:", n_rows, "\n")
+  
+  agg_df <- data.frame(matrix(0, nrow = n_rows, ncol = length(all_cols)))
+  colnames(agg_df) <- all_cols
+  
+  # Tel per data.frame de waarden op (rij per rij) in de juiste kolom,
+  # vervang NA's door 0 voordat je optelt.
+  for(df in non_empty) {
+    for(col in colnames(df)) {
+      # Converteer naar numeriek en vervang NA's door 0
+      vals <- as.numeric(as.character(df[[col]]))
+      vals[is.na(vals)] <- 0
+      agg_df[[col]] <- agg_df[[col]] + vals
+    }
+  }
+  return(agg_df)
+}
+
+
+
+# -----------------------------
+# 3. Aggregatie per categorie
+# -----------------------------
+cat("\n=== Aggregatie Ratio's ===\n")
+agg_ratio <- aggregate_by_sum(ratio_list)
+cat("Eerste paar rijen van agg_ratio:\n")
+print(head(agg_ratio))
+
+cat("\n=== Aggregatie Overhead ===\n")
+agg_overhead <- aggregate_by_sum(overhead_list)
+cat("Eerste paar rijen van agg_overhead:\n")
+print(head(agg_overhead))
+
+cat("\n=== Aggregatie Totalen ===\n")
+agg_total <- aggregate_by_sum(total_list)
+cat("Eerste paar rijen van agg_total:\n")
+print(head(agg_total))
+
+# -----------------------------
+# 4. Combineer de geaggregeerde data in één data.frame
+# -----------------------------
+final_aggregated_df <- cbind(agg_ratio, agg_overhead, agg_total)
+cat("\n=== Final Aggregated Dataset ===\n")
+print(head(final_aggregated_df))
+
+```
+
+```{r per_warehouse_long, echo=TRUE, message=FALSE, warning=FALSE}
+library(dplyr)
+
+# 1) Maak long-form dataframe: één rij per (warehouse × week)
+long_df <- bind_rows(
+  lapply(names(aggregated_by_warehouse), function(wh) {
+    df <- aggregated_by_warehouse[[wh]]
+    df <- df %>%
+      mutate(
+        Warehouse = wh,
+        Week      = seq_len(nrow(.))   # of gebruik je datumkolom hier
+      )
+    df
+  })
+)
+
+# 2) Zet alle kolommen (behalve Warehouse en Week) om naar numeric
+long_df <- long_df %>%
+  mutate(across(-c(Warehouse, Week), ~ as.numeric(as.character(.))))
+
+# 3) (Optioneel) Normalisatie op Prod. Hours
+long_df_norm <- long_df %>%
+  mutate(across(-c(Warehouse, Week, `Prod. Hours`),
+                ~ .x / `Prod. Hours`))
+
+# 4) Split in 70% train, 30% test
+set.seed(123)
+n         <- nrow(long_df_norm)
+train_idx <- sample.int(n, size = floor(0.7 * n))
+train_df  <- long_df_norm[train_idx, ]
+test_df   <- long_df_norm[-train_idx, ]
+```
+
+
+```{r}
+# Aangepaste functie: Aggregateer per rij de waarden, vervang NA's door 0
+aggregate_by_sum <- function(df_list) {
+  # Selecteer alleen die data.frames die wel kolommen hebben en daadwerkelijk data.frames zijn
+  valid <- sapply(df_list, function(df) {
+    is.data.frame(df) && ncol(df) > 0
+  })
+  non_empty <- df_list[valid]
+  
+  if(length(non_empty) == 0) {
+    cat("Alle data.frames in de lijst zijn leeg.\n")
+    return(data.frame())
+  }
+  
+  # Bepaal de unie van alle kolomnamen in de niet-lege data.frames
+  all_cols <- unique(unlist(lapply(non_empty, colnames)))
+  
+  # Gebruik de eerste niet-lege data.frame om het aantal rijen te bepalen
+  n_rows <- nrow(non_empty[[1]])
+  if(is.null(n_rows) || is.na(n_rows)) {
+    n_rows <- 0
+  }
+  num_cols <- length(all_cols)
+  
+  # Zorg dat de dimensies numeriek zijn
+  agg_df <- data.frame(matrix(0, nrow = as.numeric(n_rows), ncol = as.numeric(num_cols)))
+  colnames(agg_df) <- all_cols
+  
+  # Tel per data.frame de waarden op (rij per rij) in de juiste kolom, vervang NA's door 0
+  for(df in non_empty) {
+    for(col in colnames(df)) {
+      vals <- as.numeric(as.character(df[[col]]))
+      vals[is.na(vals)] <- 0
+      agg_df[[col]] <- agg_df[[col]] + vals
+    }
+  }
+  return(agg_df)
+}
+
+# -----------------------------
+# Extra chunk: Groepering per gemiddelde Prod. Hours per warehouse
+# -----------------------------
+
+# 1. Bereken per warehouse het gemiddelde van "TOTAL Prod. Hours"
+warehouse_avg_prod <- sapply(total_list, function(df) {
+  if("TOTAL Prod. Hours" %in% colnames(df)){
+    mean(as.numeric(df[["TOTAL Prod. Hours"]]), na.rm = TRUE)
+  } else {
+    NA
+  }
+})
+
+cat("Gemiddelde Prod. Hours per warehouse:\n")
+print(warehouse_avg_prod)
+
+# 2. Verdeel de warehouses in drie groepen op basis van de gemiddelde Prod. Hours
+group1_names <- names(warehouse_avg_prod[warehouse_avg_prod < 200])
+group2_names <- names(warehouse_avg_prod[warehouse_avg_prod >= 200 & warehouse_avg_prod <= 1000])
+group3_names <- names(warehouse_avg_prod[warehouse_avg_prod > 1000])
+
+cat("Warehouses groep 1 (<200 Prod. Hours):\n")
+print(group1_names)
+cat("Warehouses groep 2 (200-1000 Prod. Hours):\n")
+print(group2_names)
+cat("Warehouses groep 3 (>1000 Prod. Hours):\n")
+print(group3_names)
+
+# 3. Maak per groep de geaggregeerde datasets (net zoals voor final_aggregated_df)
+
+# Groep 1: Gemiddelde Prod. Hours < 200
+agg_ratio_group1   <- aggregate_by_sum(ratio_list[group1_names])
+agg_overhead_group1 <- aggregate_by_sum(overhead_list[group1_names])
+agg_total_group1   <- aggregate_by_sum(total_list[group1_names])
+final_aggregated_group1 <- cbind(agg_ratio_group1, agg_overhead_group1, agg_total_group1)
+
+# Groep 2: Gemiddelde Prod. Hours tussen 200 en 1000
+agg_ratio_group2   <- aggregate_by_sum(ratio_list[group2_names])
+agg_overhead_group2 <- aggregate_by_sum(overhead_list[group2_names])
+agg_total_group2   <- aggregate_by_sum(total_list[group2_names])
+final_aggregated_group2 <- cbind(agg_ratio_group2, agg_overhead_group2, agg_total_group2)
+
+# Groep 3: Gemiddelde Prod. Hours > 1000
+agg_ratio_group3   <- aggregate_by_sum(ratio_list[group3_names])
+agg_overhead_group3 <- aggregate_by_sum(overhead_list[group3_names])
+agg_total_group3   <- aggregate_by_sum(total_list[group3_names])
+final_aggregated_group3 <- cbind(agg_ratio_group3, agg_overhead_group3, agg_total_group3)
+
+# 4. Controleer de eerste paar rijen van elke geaggregeerde dataset
+cat("\n=== Final Aggregated Dataset - Groep 1 (<200 Prod. Hours) ===\n")
+print(head(final_aggregated_group1))
+cat("\n=== Final Aggregated Dataset - Groep 2 (200-1000 Prod. Hours) ===\n")
+print(head(final_aggregated_group2))
+cat("\n=== Final Aggregated Dataset - Groep 3 (>1000 Prod. Hours) ===\n")
+print(head(final_aggregated_group3))
+
+```
+
+```{r}
+# ---- Ratio-variabelen groeperen zonder aggregatie ----
+
+# 1. Definieer een lijst met groepen.
+ratio_groups <- list(
+  A_Receiving = c(
+    "ratio_A_Breakdown EMB", "ratio_A_Measuring Items", "ratio_A_Military Control Pieces",
+    "ratio_A_Receiving", "ratio_A_Receiving Boxes S76", "ratio_A_Receiving Boxes S77", 
+    "ratio_A_Receiving Boxes S78", "ratio_A_Receiving Boxes S99",
+    "ratio_A_Receiving Holders", "ratio_A_Receiving Holders FP", 
+    "ratio_A_Receiving Holders GARDEN", "ratio_A_Receiving Holders HOME", 
+    "ratio_A_Receiving Holders OVS", "ratio_A_Receiving Holders Return",
+    "ratio_A_Receiving Holders S76", "ratio_A_Receiving Holders S77", 
+    "ratio_A_Receiving Holders S78", "ratio_A_Receiving Holders S99",
+    "ratio_A_Receiving Holders SAMP", "ratio_A_Receiving Holders TEXT",
+    "ratio_A_Receiving Holders X2O", "ratio_A_Receiving Pallets", 
+    "ratio_A_Receiving Pallets RF", "ratio_A_Receiving Pallets SSCC",
+    "ratio_A_Receiving Pieces", "ratio_A_Receiving Pieces Mobile",
+    "ratio_A_Sorting Boxes", "ratio_A_Sorting Boxes LAYER", 
+    "ratio_A_Sorting Boxes US2EUR", "ratio_A_Sorting Boxes XD S76",
+    "ratio_A_Sorting Mixed Pallets", "ratio_A_Spare Parts IN",
+    "ratio_A_Strapping", "ratio_A_Supply Breakdown",
+    "ratio_B_Unfoiling Mini Pallets", "ratio_B_Unloading & Sorting Holders"
+  ),
+  A_Putaway_Manual = c(
+    "ratio_A_Putaway Boxes",
+    "ratio_A_Putaway Boxes S77",
+    "ratio_A_Putaway Customer & SP",
+    "ratio_A_Putaway Holders",
+    "ratio_A_Putaway Holders CTL",
+    "ratio_A_Putaway Holders MEZZ",
+    "ratio_A_Putaway Holders SAMP",
+    "ratio_A_Putaway Holders TEXT",
+    "ratio_A_Putaway Pieces",
+    "ratio_A_Putaway VAN"
+  ),
+  A_Putaway_Auto = c(
+    "ratio_A_Putaway Boxes G2M",
+    "ratio_B_Conveyor Boxes",
+    "ratio_B_Replenishment Boxes G+",
+    "ratio_B_Transfer Boxes G+"
+  ),
+  A_Unloading_Boxes = c(
+    "ratio_A_Unloading Boxes",
+    "ratio_A_Unloading Boxes Bulky",
+    "ratio_A_Unloading Boxes G",
+    "ratio_A_Unloading Boxes GARDEN",
+    "ratio_A_Unloading Boxes Heavy",
+    "ratio_A_Unloading Boxes HOME",
+    "ratio_A_Unloading Boxes LD",
+    "ratio_A_Unloading Boxes Light",
+    "ratio_A_Unloading Boxes OVS",
+    "ratio_A_Unloading Boxes S76",
+    "ratio_A_Unloading Boxes S77",
+    "ratio_A_Unloading Boxes S78",
+    "ratio_A_Unloading Boxes S99",
+    "ratio_A_Unloading Boxes SS",
+    "ratio_A_Unloading Boxes X2O",
+    "ratio_A_Unloading Boxes XDock",
+    "ratio_A_Unloading Holders Ctr",
+    "ratio_A_Unloading Holders Truck",
+    "ratio_A_Unloading Pieces",
+    "ratio_A_Unloading Pieces CB",
+    "ratio_A_Unloading Pieces Container",
+    "ratio_A_Unloading Pieces NB",
+    "ratio_A_Unloading Pieces Truck"
+  ),
+  A_Unloading_Pallets = c(
+    "ratio_A_Unloading Clamps",
+    "ratio_A_Unloading Euro Pallets",
+    "ratio_A_Unloading Holders",
+    "ratio_A_Unloading Mini Pallets",
+    "ratio_A_Unloading Pallets",
+    "ratio_A_Unloading Pallets Demontage",
+    "ratio_A_Unloading Pallets Empty",
+    "ratio_A_Unloading Pallets Euro",
+    "ratio_A_Unloading Pallets Ondulys",
+    "ratio_A_Unloading Pallets S76",
+    "ratio_A_Unloading Pallets S77",
+    "ratio_A_Unloading Pallets S78",
+    "ratio_A_Unloading Pallets S99",
+    "ratio_A_Unloading Pallets Slipsheet",
+    "ratio_A_Unloading Pallets SS",
+    "ratio_A_Unloading Pallets US",
+    "ratio_A_Unloading Trailers"
+  ),
+  B_Loading = c(
+    "ratio_A_Outgoing XDK Pallets",
+    "ratio_B_Loading",
+    "ratio_B_Loading Boxes",
+    "ratio_B_Loading Clamps",
+    "ratio_B_Loading Euro Pallets",
+    "ratio_B_Loading Holders",
+    "ratio_B_Loading Holders SAMP",
+    "ratio_B_Loading Holders TEXT",
+    "ratio_B_Loading Mini Pallets",
+    "ratio_B_Loading Pallets",
+    "ratio_B_Loading Pallets E@H",
+    "ratio_B_Loading Pallets GARDEN",
+    "ratio_B_Loading Pallets HOME",
+    "ratio_B_Loading Pallets OVS",
+    "ratio_B_Loading Pallets PAK",
+    "ratio_B_Loading Pallets X2O",
+    "ratio_B_Loading Pieces"
+  ),
+  B_Packing = c(
+    "ratio_B_Consolidation",
+    "ratio_B_Detail Packing Holders",
+    "ratio_B_Fast Packing Holders",
+    "ratio_B_Pack/Strap Orderlines",
+    "ratio_B_Packing",
+    "ratio_B_Packing Boxes",
+    "ratio_B_Packing Boxes CAS",
+    "ratio_B_Packing Boxes Ecom",
+    "ratio_B_Packing Boxes END",
+    "ratio_B_Packing Boxes OMH",
+    "ratio_B_Packing Boxes S76",
+    "ratio_B_Packing Boxes S77",
+    "ratio_B_Packing Boxes S78",
+    "ratio_B_Packing Boxes S99",
+    "ratio_B_Packing Holder",
+    "ratio_B_Packing Holders",
+    "ratio_B_Packing Holders B2B",
+    "ratio_B_Packing Holders B2C",
+    "ratio_B_Packing Holders C",
+    "ratio_B_Packing Holders CC-LS-EM",
+    "ratio_B_Packing Holders E@H",
+    "ratio_B_Packing Holders ECOM GD",
+    "ratio_B_Packing Holders ECOM X2O",
+    "ratio_B_Packing Holders NC",
+    "ratio_B_Packing Holders PAK",
+    "ratio_B_Packing Holders SAMP",
+    "ratio_B_Packing Holders TEXT",
+    "ratio_B_Packing Orderlines",
+    "ratio_B_Packing Orderlines CTL",
+    "ratio_B_Packing Orderlines STD",
+    "ratio_B_Packing Pallets",
+    "ratio_B_Packing Pallets B2B",
+    "ratio_B_Packing Pallets Mixed",
+    "ratio_B_Packing Pieces",
+    "ratio_B_Packing Pieces Mono",
+    "ratio_B_Packing Pieces Multi",
+    "ratio_B_Paint Packing Holders",
+    "ratio_B_Pickbox Making",
+    "ratio_B_Pickbox Making G+",
+    "ratio_B_Presorting Boxes PAK",
+    "ratio_B_Wrapping Pallets"
+  ),
+  B_Picking_Manual = c(
+    "ratio_B_P2L & Mezzanine",
+    "ratio_B_Picking",
+    "ratio_B_Picking AHL GARDEN",
+    "ratio_B_Picking AHL HOME",
+    "ratio_B_Picking AHL OVS",
+    "ratio_B_Picking AHL X2O",
+    "ratio_B_Picking Boxes",
+    "ratio_B_Picking Boxes 1 Man",
+    "ratio_B_Picking Boxes 2 Man",
+    "ratio_B_Picking Boxes B2B 1M",
+    "ratio_B_Picking Boxes B2B 2M",
+    "ratio_B_Picking Boxes B2B Bulky",
+    "ratio_B_Picking Boxes S76",
+    "ratio_B_Picking Boxes S77",
+    "ratio_B_Picking Boxes S78",
+    "ratio_B_Picking Boxes S99",
+    "ratio_B_Picking DUO GARDEN",
+    "ratio_B_Picking DUO HOME",
+    "ratio_B_Picking DUO OVS",
+    "ratio_B_Picking DUO X2O",
+    "ratio_B_Picking ECOM DUO X2O",
+    "ratio_B_Picking ECOM GARDEN",
+    "ratio_B_Picking ECOM HOME",
+    "ratio_B_Picking ECOM OVS",
+    "ratio_B_Picking ECOM X2O",
+    "ratio_B_Picking Holders",
+    "ratio_B_Picking Holders DYO",
+    "ratio_B_Picking Holders Samples",
+    "ratio_B_Picking Holders TEXT",
+    "ratio_B_Picking Holders XDock",
+    "ratio_B_Picking Orderlines",
+    "ratio_B_Picking Pieces",
+    "ratio_B_Picking Pieces (Pce+Box)",
+    "ratio_B_Picking Pieces DYN (Pce+Box)",
+    "ratio_B_Picking Pieces Ecom",
+    "ratio_B_Picking Pieces Flex",
+    "ratio_B_Picking Pieces High",
+    "ratio_B_Picking Pieces Low",
+    "ratio_B_Picking Pieces Mezz",
+    "ratio_B_Picking Pieces Mobile",
+    "ratio_B_Picking Pieces S76",
+    "ratio_B_Picking Pieces S76 PRICE",
+    "ratio_B_Picking Pieces S77",
+    "ratio_B_Picking Pieces S78",
+    "ratio_B_Picking Pieces S99",
+    "ratio_B_Picking Queues",
+    "ratio_B_Picking Queues 1M",
+    "ratio_B_Picking Queues 2M",
+    "ratio_B_Picking Queues B2B",
+    "ratio_B_Picking Queues B2BCOL",
+    "ratio_B_Picking Queues B2BPAL",
+    "ratio_B_Picking Queues B2C",
+    "ratio_B_Picking Queues B2C MEZZ",
+    "ratio_B_Picking Queues B2C RACK",
+    "ratio_B_Picking Queues CC-LC",
+    "ratio_B_Picking Queues COL",
+    "ratio_B_Picking Queues CTL",
+    "ratio_B_Picking Queues DUO",
+    "ratio_B_Picking Queues E@H",
+    "ratio_B_Picking Queues Ecom",
+    "ratio_B_Picking Queues FB",
+    "ratio_B_Picking Queues FPFB",
+    "ratio_B_Picking Queues INLINE",
+    "ratio_B_Picking Queues MEZZ",
+    "ratio_B_Picking Queues Mono",
+    "ratio_B_Picking Queues MONO",
+    "ratio_B_Picking Queues MULTI",
+    "ratio_B_Picking Queues Multi",
+    "ratio_B_Picking Queues NC",
+    "ratio_B_Picking Queues PAK",
+    "ratio_B_Picking Queues PAK COM",
+    "ratio_B_Picking Queues PAL",
+    "ratio_B_Picking Queues PP",
+    "ratio_B_Picking Queues PP B2C 1M",
+    "ratio_B_Picking Queues PP B2C 2M",
+    "ratio_B_Picking Queues PP B2C BULKY",
+    "ratio_B_Picking Queues PPFB",
+    "ratio_B_Picking Queues RACK",
+    "ratio_B_Picking Queues Rack PAK",
+    "ratio_B_Picking Queues RF",
+    "ratio_B_Picking Queues SAMP",
+    "ratio_B_Picking Queues Shop",
+    "ratio_B_Picking Queues Warehouse",
+    "ratio_B_Picking SHOP GARDEN",
+    "ratio_B_Picking SHOP HOME",
+    "ratio_B_Picking SHOP OVS",
+    "ratio_B_Picking SHOP X2O"
+  ),
+  B_Picking_Auto = c(
+    "ratio_B_Picking G+ (Pce & Polybag)",
+    "ratio_B_Picking Holders P2L",
+    "ratio_B_Picking Pieces P2L",
+    "ratio_B_Picking Queues G2M",
+    "ratio_B_Picking Queues LIFT (Inc PA)",
+    "ratio_B_Picking Visits G+",
+    "ratio_B_Picking Visits G2M"
+  ),
+  C_Pallet_Moves = c(
+    "ratio_A_Putaway",
+    "ratio_A_Putaway Clamps",
+    "ratio_A_Putaway Holders RACK",
+    "ratio_A_Putaway Pallets",
+    "ratio_A_Putaway Pallets Narrow",
+    "ratio_A_Putaway Pallets Narrow S76",
+    "ratio_A_Putaway Pallets Narrow S77",
+    "ratio_A_Putaway Pallets Old",
+    "ratio_A_Transfer Pallets",
+    "ratio_A_Transfer Pallets IN",
+    "ratio_A_Transfer Pallets XD S77",
+    "ratio_A_Transfer Pallets XD S78",
+    "ratio_A_Transfer Pallets XD S99",
+    "ratio_B_Move Putaway",
+    "ratio_B_Pallet Moves",
+    "ratio_B_Pallet moves",
+    "ratio_B_Pallet Moves GARDEN",
+    "ratio_B_Pallet Moves HOME",
+    "ratio_B_Pallet Moves Narrow",
+    "ratio_B_Pallet Moves OVS",
+    "ratio_B_Pallet Moves X2O",
+    "ratio_B_Picking Clamps",
+    "ratio_B_Picking Pallets",
+    "ratio_B_Picking Pallets S77",
+    "ratio_B_Picking Pallets S78",
+    "ratio_B_Picking Pallets S99",
+    "ratio_B_Putaway Pallets Ret",
+    "ratio_B_Putaway Pallets Ret: Ass",
+    "ratio_B_Replenishment",
+    "ratio_B_Replenishment Euro Pallets",
+    "ratio_B_Replenishment Holders",
+    "ratio_B_Replenishment Mini Pallets",
+    "ratio_B_Replenishment Pallets",
+    "ratio_B_Replenishment Pallets G+",
+    "ratio_B_Replenishment Pallets Narrow",
+    "ratio_B_Retrieval Pallets G+",
+    "ratio_B_Transfer Pallets",
+    "ratio_B_Transfer Pallets GARDEN",
+    "ratio_B_Transfer Pallets HOME",
+    "ratio_B_Transfer Pallets OVS",
+    "ratio_B_Transfer Pallets Ret",
+    "ratio_B_Transfer Pallets Ret: Ass",
+    "ratio_B_Transfer Pallets X2O"
+  ),
+  C_Box_Moves = c(
+    "ratio_B_Putaway Boxes Ret",
+    "ratio_B_Putaway Boxes Ret: Ass",
+    "ratio_B_Putaway HU Boxes",
+    "ratio_B_Replenishment Boxes",
+    "ratio_B_Replenishment Boxes PTL",
+    "ratio_B_Replenishment Boxes S76",
+    "ratio_B_Replenishment Boxes S77",
+    "ratio_B_Reslotting Boxes WCC",
+    "ratio_B_Reslotting Boxes WWW",
+    "ratio_B_Retrieval Boxes",
+    "ratio_B_Retrieval Boxes ETP",
+    "ratio_B_Retrieval Boxes OPH",
+    "ratio_B_Transfer Boxes Liv",
+    "ratio_B_Transfer Boxes Liv ECOM",
+    "ratio_B_Transfer Boxes Liv: Ass",
+    "ratio_B_Transfer Boxes Ret",
+    "ratio_B_Transfer Boxes Ret: Ass",
+    "ratio_B_Transfer Boxes To Flex",
+    "ratio_B_Transfer Boxes To Mezz",
+    "ratio_B_Transfer Boxes To P2L",
+    "ratio_B_Transfer Holders to SU",
+    "ratio_B_Transfer Pieces",
+    "ratio_B_Transfer Pieces Flex To Mezz",
+    "ratio_B_Transfer Pieces From Mezz",
+    "ratio_B_Transit Pallets"
+  ),
+  D_Cycle_Count = c(
+    "ratio_A_Cycle Count",
+    "ratio_B_Cycle Count",
+    "ratio_B_Cycle count",
+    "ratio_B_Cycle Count Locations"
+  ),
+  D_VAS = c(
+    "ratio_A_Kitting Pieces Coder",
+    "ratio_A_Kitting Pieces Modem",
+    "ratio_A_Kitting Pieces Prep",
+    "ratio_A_Manage Crates",
+    "ratio_B_Assembly Pieces",
+    "ratio_B_Control Picking Pieces",
+    "ratio_B_Inspect Pieces Final",
+    "ratio_B_Inspect Pieces On",
+    "ratio_B_Inspect Pieces Pre",
+    "ratio_B_Kitting Pieces",
+    "ratio_B_Labeling Pieces PL",
+    "ratio_B_Quality",
+    "ratio_B_Quality Check Holders",
+    "ratio_B_Repack",
+    "ratio_B_Repack Boxes",
+    "ratio_B_Repack Crates S5",
+    "ratio_B_Repack Pieces Large",
+    "ratio_B_Repack Pieces Small",
+    "ratio_B_Repacking Holders",
+    "ratio_B_Unpack Crates",
+    "ratio_B_VAS Pieces Auto",
+    "ratio_B_VAS Pieces Manual"
+  ),
+  D_Returns = c(
+    "ratio_A_Refusal Pieces GARDEN",
+    "ratio_A_Refusal Pieces HOME",
+    "ratio_A_Refusal Pieces OVS",
+    "ratio_A_Refusal Pieces X2O",
+    "ratio_A_Return Boxes",
+    "ratio_A_Return Holders",
+    "ratio_A_Return Pieces",
+    "ratio_A_Return Pieces GARDEN",
+    "ratio_A_Return Pieces HOME",
+    "ratio_A_Return Pieces OVS",
+    "ratio_A_Return Pieces X2O",
+    "ratio_A_Returns",
+    "ratio_A_Returns Pieces",
+    "ratio_B_Lobas & Remise Pieces",
+    "ratio_B_Refusal Flow Boxes",
+    "ratio_B_Returns",
+    "ratio_B_Reverse Returns",
+    "ratio_B_Sorting Boxes",
+    "ratio_B_Sorting First Sku",
+    "ratio_B_Sorting HU Sku"
+  ),
+  D_Stock = c(
+    "ratio_B_Stock"
+  )
+)
+
+# 2. Definieer een functie om de ratio-variabelen te groeperen voor een gegeven dataframe.
+group_ratio_vars <- function(df, ratio_groups) {
+  grouped <- lapply(names(ratio_groups), function(grp) {
+    vars <- ratio_groups[[grp]]
+    # Houd alleen de variabelen aan die ook daadwerkelijk in de dataframe voorkomen.
+    vars <- intersect(vars, colnames(df))
+    if(length(vars) == 0) {
+      warning("Geen variabelen gevonden voor groep: ", grp)
+      return(NULL)
+    }
+    df[, vars, drop = FALSE]
+  })
+  names(grouped) <- names(ratio_groups)
+  return(grouped)
+}
+
+# 3. Maak een lijst met de final aggregated dataframes waarop je deze groepering wil toepassen.
+final_dfs <- list(
+  "final_aggregated_df" = final_aggregated_df,
+  "final_aggregated_group1" = final_aggregated_group1,
+  "final_aggregated_group2" = final_aggregated_group2,
+  "final_aggregated_group3" = final_aggregated_group3
+)
+
+# 4. Pas de functie toe op alle dataframes in de lijst.
+grouped_ratio_vars_all <- lapply(final_dfs, function(df) {
+  group_ratio_vars(df, ratio_groups)
+})
+
+# 5. Print per dataframe en per groep de ingedeelde variabelen zodat je kunt controleren of alles naar wens is.
+for(df_name in names(grouped_ratio_vars_all)) {
+  cat("Dataframe:", df_name, "\n")
+  grp_list <- grouped_ratio_vars_all[[df_name]]
+  for(grp in names(grp_list)) {
+    cat("Groep:", grp, "\n")
+    print(colnames(grp_list[[grp]]))
+    cat("\n")
+  }
+  cat("\n")
+}
+
+```
+
+```{r}
+# Definieer eerst de lijst met de vier final aggregated dataframes.
+final_dfs <- list(
+  "final_aggregated_df" = final_aggregated_df,
+  "final_aggregated_group1" = final_aggregated_group1,
+  "final_aggregated_group2" = final_aggregated_group2,
+  "final_aggregated_group3" = final_aggregated_group3
+)
+
+# Definieer de kolommen die verwijderd moeten worden (niet-relevant)
+not_relevant <- c(
+  "Decentral Support",
+  "Fuji Oil",
+  "Operational empl Dag Hours",
+  "Operational empl Shift Hours",
+  "Operational Employees",
+  "Operational Employees Shift",
+  "Pro-Duo",
+  "Responsable Person",
+  "Responsible Person",
+  "Supervisor Admin",
+  "Teamleader Admin",
+  "Technical Department",
+  "Transport",
+  "Vanneste"
+)
+
+# Zorg dat de functie group_ratio_vars en de lijst ratio_groups reeds gedefinieerd zijn.
+# (Zie de eerdere code voor ratio_groups en de functie group_ratio_vars.)
+
+# Definieer een functie die alle bewerkingen uitvoert op een dataframe.
+process_df <- function(df) {
+  
+  # --- Stap 1: Combineer de specifieke variabelen ---
+  
+  # Combineer Administration-variabelen
+  admin_cols <- c("Administration Inbound", "Administration Outbound", "Administration")
+  existing_admin_cols <- intersect(admin_cols, colnames(df))
+  if (length(existing_admin_cols) > 0) {
+    df$Administration_Agg <- rowSums(df[, existing_admin_cols, drop = FALSE], na.rm = TRUE)
+    df <- df[, !(colnames(df) %in% existing_admin_cols)]
+  }
+  
+  # Combineer Supervisor-variabelen
+  supervisor_cols <- c("Supervisor", "Supervisor Warehouse")
+  existing_supervisor_cols <- intersect(supervisor_cols, colnames(df))
+  if (length(existing_supervisor_cols) > 0) {
+    df$Supervisor_Agg <- rowSums(df[, existing_supervisor_cols, drop = FALSE], na.rm = TRUE)
+    df <- df[, !(colnames(df) %in% existing_supervisor_cols)]
+  }
+  
+  # Combineer TeamLeader-variabelen
+  teamleader_cols <- c("Deviations", "Teamcoach Dag", "Teamcoach Dag Hours", 
+                       "Teamcoach Shift", "Teamcoach shift Hours", 
+                       "Teamleader", "TeamLeader", "Teamleader Warehouse")
+  existing_teamleader_cols <- intersect(teamleader_cols, colnames(df))
+  if (length(existing_teamleader_cols) > 0) {
+    df$TeamLeader_Agg <- rowSums(df[, existing_teamleader_cols, drop = FALSE], na.rm = TRUE)
+    df <- df[, !(colnames(df) %in% existing_teamleader_cols)]
+  }
+  
+  # --- Stap 2: Bereken voor elke ratio-groep de wekelijkse som ---
+  # Gebruik de eerder gedefinieerde functie group_ratio_vars om de ratio-variabelen te groeperen.
+  grouped_vars <- group_ratio_vars(df, ratio_groups)
+  for (grp in names(grouped_vars)) {
+    if (!is.null(grouped_vars[[grp]])) {
+      new_varname <- paste0("grouped_", grp)
+      df[[new_varname]] <- rowSums(grouped_vars[[grp]], na.rm = TRUE)
+    }
+  }
+  
+  # --- Stap 3: Verwijder alle overgebleven kolommen die beginnen met "ratio_" ---
+  df <- df[, !grepl("^ratio_", colnames(df))]
+  
+  # --- Stap 4: Verwijder de kolommen die niet relevant zijn ---
+  df <- df[, !(colnames(df) %in% not_relevant)]
+  
+  # --- Stap 5: Verwijder de prefix "grouped_" of "agg_" uit de kolomnamen ---
+  colnames(df) <- sub("^(grouped_|agg_)", "", colnames(df))
+  
+  # --- Stap 6: Herbenoem *_Agg kolommen naar kortere versie ---
+  colnames(df) <- gsub("TeamLeader_Agg", "Teamleader", colnames(df))
+  colnames(df) <- gsub("Supervisor_Agg", "Supervisor", colnames(df))
+  colnames(df) <- gsub("Administration_Agg", "Administration", colnames(df))
+  
+  # --- Stap 7: Hernoem totalen-kolommen indien nodig ---
+  colnames(df) <- gsub("^TOTAL Prod. Hours$", "Prod. Hours", colnames(df))
+  colnames(df) <- gsub("^TOTAL E-Times$", "E-Times", colnames(df))
+  colnames(df) <- gsub("^TOTAL V-Times$", "V-Times", colnames(df))
+  
+  # --- Stap 8: Normalisatie ---
+  # Normalisatie: Deel alle kolommen (behalve de scaling variabele 'Prod. Hours') door de waarde in 'Prod. Hours'
+  scaling_var <- "Prod. Hours"
+  cols_to_normalize <- setdiff(colnames(df), scaling_var)
+  
+  # Maak een kopie waarin de normalisatie wordt toegepast
+  df_norm <- df
+  df_norm[cols_to_normalize] <- lapply(df_norm[cols_to_normalize], function(x) as.numeric(as.character(x)) / df_norm[[scaling_var]])
+  
+  # Geef beide versies terug (geproceste en genormaliseerde data)
+  list(processed = df, normalized = df_norm)
+}
+
+# Pas de functie toe op alle vier de dataframes
+final_dfs_processed <- lapply(final_dfs, process_df)
+
+# Voor controle: print de eerste paar rijen van de genormaliseerde versies van elke dataframe
+for(df_name in names(final_dfs_processed)) {
+  cat("Dataframe:", df_name, "\n")
+  print(head(final_dfs_processed[[df_name]]$normalized))
+  cat("\n")
+}
+
+```
+```{r}
+final_dfs_processed <- lapply(final_dfs_processed, function(x) {
+  # Voor de genormaliseerde data
+  norm_cols <- trimws(colnames(x$normalized))
+  # Verwijder kolommen waarvan de naam (ongeacht spaties/underscores) "d_stock" bevat
+  x$normalized <- x$normalized[, !grepl("d[_\\s]*stock", norm_cols, ignore.case = TRUE)]
+  
+  # Voor de niet-genormaliseerde data
+  proc_cols <- trimws(colnames(x$processed))
+  x$processed <- x$processed[, !grepl("d[_\\s]*stock", proc_cols, ignore.case = TRUE)]
+  
+  return(x)
+})
+
+
+```
+
+
+```{r}
+# Loop door alle dataframes in final_dfs_processed en sla ze apart op
+for(df_name in names(final_dfs_processed)) {
+  norm_df <- final_dfs_processed[[df_name]]$normalized
+  
+  # Stel bestandsnamen samen
+  csv_filename <- paste0(df_name, ".csv")
+  rds_filename <- paste0(df_name, ".rds")
+  
+  # Sla het dataframe op als CSV en RDS
+  write.csv(norm_df, csv_filename, row.names = FALSE)
+  saveRDS(norm_df, rds_filename)
+  
+  cat("Dataframe", df_name, "is opgeslagen als", csv_filename, "en", rds_filename, "\n")
+}
+
+# Opslaan van de niet-genormaliseerde dataframes
+for(df_name in names(final_dfs_processed)) {
+  processed_df <- final_dfs_processed[[df_name]]$processed
+  
+  # Stel bestandsnamen samen met een suffix om te onderscheiden van de genormaliseerde versies
+  csv_filename <- paste0(df_name, "_non_normalized.csv")
+  rds_filename <- paste0(df_name, "_non_normalized.rds")
+  
+  # Sla het dataframe op als CSV en RDS
+  write.csv(processed_df, csv_filename, row.names = FALSE)
+  saveRDS(processed_df, rds_filename)
+  
+  cat("Niet-genormaliseerde dataframe", df_name, "is opgeslagen als", csv_filename, "en", rds_filename, "\n")
+}
+
+
+```
+
